@@ -13,15 +13,19 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package v1beta1
 
 import (
 	"fmt"
 	"net"
 
-	"github.com/asaskevich/govalidator"
 	"github.com/k0sproject/k0s/internal/pkg/iface"
 	"github.com/k0sproject/k0s/internal/pkg/stringslice"
+
+	"k8s.io/apimachinery/pkg/util/validation/field"
+
+	"github.com/asaskevich/govalidator"
 )
 
 var _ Validateable = (*APISpec)(nil)
@@ -47,13 +51,15 @@ type APISpec struct {
 	SANs []string `json:"sans"`
 }
 
+const defaultKasPort = 6443
+
 // DefaultAPISpec default settings for api
 func DefaultAPISpec() *APISpec {
 	// Collect all nodes addresses for sans
 	addresses, _ := iface.AllAddresses()
 	publicAddress, _ := iface.FirstPublicAddress()
 	return &APISpec{
-		Port:                   6443,
+		Port:                   defaultKasPort,
 		K0sAPIPort:             9443,
 		SANs:                   addresses,
 		Address:                publicAddress,
@@ -111,21 +117,33 @@ func (a *APISpec) Sans() []string {
 
 // Validate validates APISpec struct
 func (a *APISpec) Validate() []error {
+	if a == nil {
+		return nil
+	}
+
 	var errors []error
 
-	for _, a := range a.Sans() {
-		if govalidator.IsIP(a) {
-			continue
-		}
-		if govalidator.IsDNSName(a) {
-			continue
-		}
-		errors = append(errors, fmt.Errorf("%s is not a valid address for sans", a))
-	}
-
 	if !govalidator.IsIP(a.Address) {
-		errors = append(errors, fmt.Errorf("spec.api.address: %q is not IP address", a.Address))
+		errors = append(errors, field.Invalid(field.NewPath("address"), a.Address, "invalid IP address"))
 	}
 
+	validateIPAddressOrDNSName := func(path *field.Path, san string) {
+		if govalidator.IsIP(san) || govalidator.IsDNSName(san) {
+			return
+		}
+		errors = append(errors, field.Invalid(path, san, "invalid IP address / DNS name"))
+	}
+
+	sansPath := field.NewPath("sans")
+	for idx, san := range a.SANs {
+		validateIPAddressOrDNSName(sansPath.Index(idx), san)
+	}
+
+	if a.ExternalAddress != "" {
+		validateIPAddressOrDNSName(field.NewPath("externalAddress"), a.ExternalAddress)
+	}
+	if a.TunneledNetworkingMode && a.Port == defaultKasPort {
+		errors = append(errors, fmt.Errorf("can't use default kubeapi port if TunneledNetworkingMode is enabled"))
+	}
 	return errors
 }

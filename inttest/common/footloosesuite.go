@@ -13,16 +13,18 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package common
 
 import (
-	"archive/zip"
 	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"net/url"
@@ -30,33 +32,38 @@ import (
 	"os/exec"
 	"os/signal"
 	"path"
-	"runtime"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"text/template"
 	"time"
 
+	"github.com/k0sproject/k0s/internal/pkg/file"
 	apclient "github.com/k0sproject/k0s/pkg/apis/autopilot.k0sproject.io/v1beta2/clientset"
+	"github.com/k0sproject/k0s/pkg/kubernetes/watch"
 	extclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/typed/apiextensions/v1"
 
-	"github.com/go-openapi/jsonpointer"
-	"github.com/pkg/errors"
-	"github.com/stretchr/testify/suite"
-	"github.com/weaveworks/footloose/pkg/cluster"
-	"github.com/weaveworks/footloose/pkg/config"
-	"golang.org/x/sync/errgroup"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
-	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 	"sigs.k8s.io/yaml"
 
-	corev1 "k8s.io/api/core/v1"
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
+	"github.com/go-openapi/jsonpointer"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/suite"
+	"github.com/weaveworks/footloose/pkg/cluster"
+	"github.com/weaveworks/footloose/pkg/config"
+	"go.uber.org/multierr"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -66,49 +73,54 @@ const (
 	etcdNodeNameFormat         = "etcd%d"
 	updateServerNodeNameFormat = "updateserver%d"
 
-	defaultK0sBinaryFullPath   = "/usr/local/bin/k0s"
-	k0sBindMountFullPath       = "/dist/k0s"
-	k0sAirgapBindMountFullPath = "/dist/bundle.tar"
+	defaultK0sBinaryFullPath = "/usr/local/bin/k0s"
+	k0sBindMountFullPath     = "/dist/k0s"
+	k0sNewBindMountFullPath  = "/dist/k0s-new"
+
+	defaultK0sUpdateVersion = "v0.0.0"
 )
 
 // FootlooseSuite defines all the common stuff we need to be able to run k0s testing on footloose.
 type FootlooseSuite struct {
 	suite.Suite
 
-	// Provide alternate launch functionalities as-needed.
-
-	LaunchMode     LaunchMode
-	launchDelegate *LaunchDelegate
-
 	/* config knobs (initialized via `initializeDefaults`) */
 
-	ControllerCount       int
-	ControllerUmask       int
-	ExtraVolumes          []config.Volume
-	K0sFullPath           string
-	K0sAPIExternalPort    int
-	KonnectivityAdminPort int
-	KonnectivityAgentPort int
-	KubeAPIExternalPort   int
-	WithExternalEtcd      bool
-	WithLB                bool
-	WorkerCount           int
-	WithUpdateServer      bool
+	LaunchMode                   LaunchMode
+	ControllerCount              int
+	ControllerUmask              int
+	ExtraVolumes                 []config.Volume
+	K0sFullPath                  string
+	AirgapImageBundleMountPoints []string
+	K0sAPIExternalPort           int
+	KonnectivityAdminPort        int
+	KonnectivityAgentPort        int
+	KubeAPIExternalPort          int
+	WithExternalEtcd             bool
+	WithLB                       bool
+	WorkerCount                  int
+	WithUpdateServer             bool
+	K0sUpdateVersion             string
+	ControllerNetworks           []string
+	WorkerNetworks               []string
 
 	/* context and cancellation */
 
-	ctx          context.Context
-	cancelFunc   context.CancelFunc
-	cleanupTasks sync.WaitGroup
+	ctxPtr atomic.Pointer[suiteCtx]
 
 	/* footloose cluster setup */
 
-	clusterDir    string
-	clusterConfig config.Config
-	cluster       *cluster.Cluster
+	clusterDir     string
+	clusterConfig  config.Config
+	cluster        *cluster.Cluster
+	launchDelegate launchDelegate
 
-	ControllerNetworks []string
-	WorkerNetworks     []string
+	dataDirOpt string // Data directory option of first controller, required to fetch the cluster state
+}
+
+type suiteCtx struct {
+	ctx  context.Context
+	stop func()
 }
 
 // initializeDefaults initializes any unset configuration knobs to their defaults.
@@ -132,25 +144,42 @@ func (s *FootlooseSuite) initializeDefaults() {
 		s.LaunchMode = LaunchModeStandalone
 	}
 
+	s.K0sUpdateVersion = os.Getenv("K0S_UPDATE_TO_VERSION")
+	if s.K0sUpdateVersion == "" {
+		s.K0sUpdateVersion = defaultK0sUpdateVersion
+	}
+
 	switch s.LaunchMode {
 	case LaunchModeStandalone:
-		s.launchDelegate = s.StandaloneLaunchDelegate()
+		s.launchDelegate = &standaloneLaunchDelegate{s.K0sFullPath, s.ControllerUmask}
 	case LaunchModeOpenRC:
-		s.launchDelegate = s.OpenRCLaunchDelegate()
+		s.launchDelegate = &openRCLaunchDelegate{s.K0sFullPath}
 	default:
-		s.Require().Fail("Missing launch delegate (standalone, openrc)")
+		s.Require().Fail("Unknown launch mode", s.LaunchMode)
 	}
 }
 
 // SetupSuite does all the setup work, namely boots up footloose cluster.
 func (s *FootlooseSuite) SetupSuite() {
+	t := s.T()
+
 	s.initializeDefaults()
 
-	s.ctx, s.cancelFunc = newSuiteContext(s.T())
-	if deadline, hasDeadline := s.ctx.Deadline(); hasDeadline {
-		s.T().Logf("test teardown deadline: %s", deadline.String())
+	ctx, cancel := newSuiteContext(t)
+	var cleanupTasks sync.WaitGroup
+	sctx := suiteCtx{ctx, func() {
+		cancel()
+		cleanupTasks.Wait()
+	}}
+
+	if !s.ctxPtr.CompareAndSwap(nil, &sctx) {
+		s.Require().Fail("Failed to install suite context")
+	}
+
+	if deadline, hasDeadline := ctx.Deadline(); hasDeadline {
+		t.Logf("test teardown deadline: %s", deadline)
 	} else {
-		s.T().Log("test suite has no deadline")
+		t.Log("test suite has no deadline")
 	}
 
 	if err := s.initializeFootlooseCluster(); err != nil {
@@ -158,18 +187,35 @@ func (s *FootlooseSuite) SetupSuite() {
 	}
 
 	// perform a cleanup whenever the suite's context is canceled
-	s.cleanupTasks.Add(1)
+	cleanupTasks.Add(1)
 	go func() {
-		defer s.cleanupTasks.Done()
-		<-s.ctx.Done()
-		s.cleanupSuite()
+		defer cleanupTasks.Done()
+		<-ctx.Done()
+
+		t.Logf("Cleaning up")
+
+		// Replace the done context with a fresh one.
+		ctx, cancel := newSuiteContext(t)
+		defer cancel()
+		if s.ctxPtr.CompareAndSwap(&sctx, &suiteCtx{ctx, cleanupTasks.Wait}) {
+			if deadline, hasDeadline := ctx.Deadline(); hasDeadline {
+				t.Logf("Test cleanup deadline: %s", deadline)
+			} else {
+				t.Log("Test cleanup has no deadline")
+			}
+		} else {
+			t.Log("Failed to replace suite context during cleanup")
+		}
+
+		s.cleanupSuite(t)
 	}()
 
-	// set up signal handler so we teardown on SIGINT or SIGTERM
-	c := make(chan os.Signal, 3)
-	signal.Notify(c, os.Interrupt, syscall.SIGTERM, syscall.SIGINT)
+	// set up signal handler so we teardown on Interrupt or SIGTERM
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	go func() {
-		<-c
+		signal := <-c
+		assert.Fail(t, "Signal received", "%s", signal)
 		s.TearDownSuite()
 		os.Exit(1)
 	}()
@@ -177,9 +223,8 @@ func (s *FootlooseSuite) SetupSuite() {
 	s.waitForSSH()
 
 	if s.WithLB {
-		go s.startHAProxy()
+		s.startHAProxy()
 	}
-
 }
 
 // waitForSSH waits to get a SSH connection to all footloose machines defined as part of the test suite.
@@ -192,39 +237,42 @@ func (s *FootlooseSuite) waitForSSH() {
 	for i := 0; i < s.WorkerCount; i++ {
 		nodes = append(nodes, s.WorkerNode(i))
 	}
-
 	if s.WithLB {
-		nodes = append(nodes, s.LBNode(0))
+		nodes = append(nodes, s.LBNode())
 	}
 
-	s.T().Logf("total of %d nodes: %v", len(nodes), nodes)
+	s.T().Logf("Waiting for SSH connections to %d nodes: %v", len(nodes), nodes)
 
-	g := errgroup.Group{}
+	g, ctx := errgroup.WithContext(s.Context())
 	for _, node := range nodes {
 		nodeName := node
 		g.Go(func() error {
-			for i := 0; i < 30; i++ {
-				err := s.cluster.SSH(nodeName, "root", "hostname")
-				if err == nil {
-					return nil
+			return wait.PollUntilWithContext(ctx, 1*time.Second, func(ctx context.Context) (bool, error) {
+				ssh, err := s.SSH(nodeName)
+				if err != nil {
+					return false, nil
 				}
-				s.T().Logf("retrying ssh to %s", nodeName)
-				time.Sleep(1 * time.Second)
-			}
-			return fmt.Errorf("failed to get working SSH connection to %s", nodeName)
+				defer ssh.Disconnect()
+
+				err = ssh.Exec(ctx, "hostname", SSHStreams{})
+				if err != nil {
+					return false, nil
+				}
+
+				s.T().Logf("SSH connection to %s successful", nodeName)
+				return true, nil
+			})
 		})
 	}
 
-	err := g.Wait()
-	if err != nil {
-		s.FailNow("failed to ssh one or many nodes", err)
-		return
-	}
+	s.Require().NoError(g.Wait(), "Failed to ssh into all nodes")
 }
 
 // Context returns this suite's context, which should be passed to all blocking operations.
 func (s *FootlooseSuite) Context() context.Context {
-	return s.ctx
+	sctx := s.ctxPtr.Load()
+	s.Require().NotNil(sctx, "No suite context installed")
+	return sctx.ctx
 }
 
 // ControllerNode gets the node name of given controller index
@@ -237,114 +285,184 @@ func (s *FootlooseSuite) WorkerNode(idx int) string {
 	return fmt.Sprintf(workerNodeNameFormat, idx)
 }
 
-// LBNode gets the node of given LB index
-func (s *FootlooseSuite) LBNode(idx int) string {
+func (s *FootlooseSuite) LBNode() string {
 	if !s.WithLB {
-		s.FailNow("can't get load balancer address because it's not enabled for this suite")
+		s.FailNow("can't get load balancer node name because it's not enabled for this suite")
 	}
-	return fmt.Sprintf(lbNodeNameFormat, idx)
+	return fmt.Sprintf(lbNodeNameFormat, 0)
 }
 
-func (s *FootlooseSuite) ExternalEtcd(idx int) string {
+func (s *FootlooseSuite) ExternalEtcdNode() string {
 	if !s.WithExternalEtcd {
-		s.FailNow("can't get etcd address because it's not enabled for this suite")
+		s.FailNow("can't get external node name because it's not enabled for this suite")
 	}
-	return fmt.Sprintf(etcdNodeNameFormat, idx)
+	return fmt.Sprintf(etcdNodeNameFormat, 0)
+}
+
+// StartMachines starts specific machines(s) in cluster
+func (s *FootlooseSuite) Start(machineNames []string) error {
+	return s.cluster.Start(machineNames)
+}
+
+// Stop stops the machines in cluster.
+func (s *FootlooseSuite) Stop(machineNames []string) error {
+	return s.cluster.Stop(machineNames)
 }
 
 // TearDownSuite is called by testify at the very end of the suite's run.
 // It cancels the suite's context in order to free the suite's resources.
 func (s *FootlooseSuite) TearDownSuite() {
-	s.cancelFunc()
-	s.cleanupTasks.Wait()
+	sctx := s.ctxPtr.Load()
+	s.Require().NotNil(sctx, "No suite context installed")
+	sctx.stop()
 }
 
 // cleanupSuite does the cleanup work, namely destroy the footloose machines.
 // Intended to be called after the suite's context has been canceled.
-func (s *FootlooseSuite) cleanupSuite() {
+func (s *FootlooseSuite) cleanupSuite(t *testing.T) {
+	ctx := s.Context()
+	var wg sync.WaitGroup
+
+	tmpDir := os.TempDir()
+
+	if t.Failed() && s.ControllerCount > 0 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.dumpClusterState(t, ctx, filepath.Join(tmpDir, "cluster-state.tar"))
+		}()
+	}
+
 	machines, err := s.InspectMachines(nil)
 	if err != nil {
-		s.T().Logf("failed to inspect machines")
-	}
-	if s.T().Failed() && s.ControllerCount > 0 {
-		ssh, err := s.SSH(s.ControllerNode(0))
-		if err != nil {
-			s.T().Logf("failed to ssh to node %s to get logs", s.ControllerNode(0))
-		}
-		_, err = ssh.ExecWithOutput(fmt.Sprintf("%s kc cluster-info dump -A --output-directory /tmp/cluster-state", s.K0sFullPath))
-		if err != nil {
-			s.T().Logf("failed to dump cluster state on machine %s: %s", s.ControllerNode(0), err)
-		}
-		fileList, err := ssh.ExecWithOutput(`find /tmp/cluster-state -name "*" -type f`)
-		if err != nil {
-			s.T().Logf("failed to list cluster state files on machine %s: %s", s.ControllerNode(0), err)
-		}
-
-		zipArchive, _ := os.Create("/tmp/cluster-state.zip")
-		defer func() {
-			_ = zipArchive.Close()
-		}()
-		writer := zip.NewWriter(zipArchive)
-
-		scanner := bufio.NewScanner(strings.NewReader(fileList))
-		for scanner.Scan() {
-			filePath := scanner.Text()
-			log, err := ssh.ExecWithOutput(fmt.Sprintf("cat %s", filePath))
-			if err != nil {
-				s.T().Logf("failed to cat file %s on machine %s: %s", filePath, s.ControllerNode(0), err)
-			} else {
-				w, err := writer.Create(strings.TrimPrefix(filePath, "/tmp/cluster-state"))
-				if err != nil {
-					s.T().Logf("failed to create file %s in the archive: %s", filePath, err)
-				}
-				if _, err = w.Write([]byte(log)); err != nil {
-					s.T().Logf("failed to write file %s to the archive: %s", filePath, err)
-				}
-			}
-		}
-		_ = writer.Close()
-		ssh.Disconnect()
+		t.Logf("Failed to inspect machines: %s", err.Error())
+		machines = nil
 	}
 
 	for _, m := range machines {
-		if strings.HasPrefix(m.Hostname(), "lb") {
+		node := m.Hostname()
+		if strings.HasPrefix(node, "lb") {
 			continue
 		}
-		ssh, err := s.SSH(m.Hostname())
-		if err != nil {
-			s.T().Logf("failed to ssh to node %s to get logs", m.Hostname())
-			continue
-		}
-		logPathInContainer := ""
-		switch s.LaunchMode {
-		case LaunchModeOpenRC:
-			logPathInContainer = "/var/log/k0s.log"
-		case LaunchModeStandalone:
-			logPathInContainer = "/tmp/k0s-*.log"
-		default:
-			s.T().Logf(`unknown launchmode %s, dunno how to collect logs ¯\_(ツ)_/¯`, s.LaunchMode)
-		}
 
-		log, err := ssh.ExecWithOutput(fmt.Sprintf("cat %s", logPathInContainer))
-		if err != nil {
-			s.T().Logf("failed to cat logs on machine %s: %s", m.Hostname(), err)
-		}
-		logPath := path.Join("/tmp", fmt.Sprintf("%s.log", m.Hostname()))
-		if err := os.WriteFile(logPath, []byte(log), 0700); err != nil {
-			s.T().Logf("failed to save logs from machine %s: %s", m.Hostname(), err)
-		}
-
-		s.T().Logf("wrote log of node %s to %s", m.Hostname(), logPath)
-		ssh.Disconnect()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.dumpNodeLogs(t, ctx, node, tmpDir)
+		}()
 	}
 
-	if keepEnvironment(s.T()) {
-		s.T().Logf("footloose cluster left intact for debugging; needs to be manually cleaned up with: footloose delete --config %s", path.Join(s.clusterDir, "footloose.yaml"))
-	} else {
-		if err := s.cluster.Delete(); err != nil {
-			s.T().Logf("failed to delete footloose cluster: %v", err)
+	wg.Wait()
+
+	if keepEnvironment(t) {
+		t.Logf("footloose cluster left intact for debugging; needs to be manually cleaned up with: footloose delete --config %s", path.Join(s.clusterDir, "footloose.yaml"))
+		return
+	}
+
+	if err := s.cluster.Delete(); err != nil {
+		t.Logf("Failed to delete footloose cluster: %s", err.Error())
+	}
+
+	cleanupClusterDir(t, s.clusterDir)
+}
+
+func (s *FootlooseSuite) dumpClusterState(t *testing.T, ctx context.Context, filePath string) {
+	node := s.ControllerNode(0)
+
+	ssh, err := s.SSH(node)
+	if err != nil {
+		t.Logf("Failed to ssh into node %s to dump cluster state: %s", node, err.Error())
+		return
+	}
+	defer ssh.Disconnect()
+
+	var cmdBuf strings.Builder
+	cmdBuf.WriteString(s.K0sFullPath)
+	if s.dataDirOpt != "" {
+		cmdBuf.WriteRune(' ')
+		cmdBuf.WriteString(s.dataDirOpt)
+	}
+	cmdBuf.WriteString(` kc cluster-info dump -A --output-directory="${TMPDIR-/tmp}"/cluster-state`)
+	cmd := cmdBuf.String()
+
+	if err := ssh.Exec(ctx, cmd, SSHStreams{}); err != nil {
+		t.Logf("Failed to dump cluster state on node %s: %s", node, err.Error())
+		return
+	}
+
+	err = file.WriteAtomically(filePath, 0644, func(unbuffered io.Writer) error {
+		w := bufio.NewWriter(unbuffered)
+		err := ssh.Exec(ctx, `tar c -C "${TMPDIR-/tmp}" cluster-state`, SSHStreams{Out: w})
+		if err != nil {
+			return err
 		}
-		cleanupClusterDir(s.T(), s.clusterDir)
+		return w.Flush()
+	})
+	if err != nil {
+		t.Logf("Failed to dump cluster state into %s: %s", filePath, err.Error())
+		return
+	}
+
+	t.Logf("Dumped cluster state into %s", filePath)
+}
+
+func (s *FootlooseSuite) dumpNodeLogs(t *testing.T, ctx context.Context, node, dir string) {
+	ssh, err := s.SSH(node)
+	if err != nil {
+		t.Logf("Failed to ssh into node %s to get logs: %s", node, err.Error())
+		return
+	}
+	defer ssh.Disconnect()
+
+	outPath := filepath.Join(dir, fmt.Sprintf("%s.out.log", node))
+	errPath := filepath.Join(dir, fmt.Sprintf("%s.err.log", node))
+
+	err = func() (err error) {
+		type log struct {
+			path   string
+			writer io.Writer
+		}
+
+		outLog, errLog := log{path: outPath}, log{path: errPath}
+		for _, log := range []*log{&outLog, &errLog} {
+			file, err := os.Create(log.path)
+			if err != nil {
+				t.Logf("Failed to create log file: %s", err.Error())
+				continue
+			}
+
+			defer multierr.AppendInvoke(&err, multierr.Close(file))
+			buf := bufio.NewWriter(file)
+			defer func() {
+				if err == nil {
+					err = buf.Flush()
+				}
+			}()
+			log.writer = buf
+		}
+
+		return s.launchDelegate.ReadK0sLogs(ctx, ssh, outLog.writer, errLog.writer)
+	}()
+	if err != nil {
+		t.Logf("Failed to save k0s logs from node %s: %s", node, err.Error())
+	}
+
+	nonEmptyPaths := make([]string, 0, 2)
+	for _, path := range []string{outPath, errPath} {
+		stat, err := os.Stat(path)
+		if err != nil {
+			continue
+		}
+		if stat.Size() == 0 {
+			_ = os.Remove(path)
+			continue
+		}
+
+		nonEmptyPaths = append(nonEmptyPaths, path)
+	}
+
+	if len(nonEmptyPaths) > 0 {
+		t.Logf("Saved k0s logs of node %s to %s", node, strings.Join(nonEmptyPaths, " and "))
 	}
 }
 
@@ -375,17 +493,17 @@ func getDataDirOpt(args []string) string {
 
 func (s *FootlooseSuite) startHAProxy() {
 	addresses := s.getControllersIPAddresses()
-	ssh, err := s.SSH("lb0")
+	ssh, err := s.SSH(s.LBNode())
 	s.Require().NoError(err)
 	defer ssh.Disconnect()
 	content := s.getLBConfig(addresses)
 
-	_, err = ssh.ExecWithOutput(fmt.Sprintf("echo '%s' >%s", content, "/tmp/haproxy.cfg"))
+	_, err = ssh.ExecWithOutput(s.Context(), fmt.Sprintf("echo '%s' >%s", content, "/tmp/haproxy.cfg"))
 
 	s.Require().NoError(err)
-	_, err = ssh.ExecWithOutput("haproxy -c -f /tmp/haproxy.cfg")
+	_, err = ssh.ExecWithOutput(s.Context(), "haproxy -c -f /tmp/haproxy.cfg")
 	s.Require().NoError(err, "LB configuration is broken", err)
-	_, err = ssh.ExecWithOutput("haproxy -f /tmp/haproxy.cfg &")
+	_, err = ssh.ExecWithOutput(s.Context(), "haproxy -D -f /tmp/haproxy.cfg")
 	s.Require().NoError(err, "Can't start LB")
 }
 
@@ -497,80 +615,17 @@ func (s *FootlooseSuite) InitController(idx int, k0sArgs ...string) error {
 	}
 	defer ssh.Disconnect()
 
-	if err := s.launchDelegate.InitController(ssh, k0sArgs...); err != nil {
+	if err := s.launchDelegate.InitController(s.Context(), ssh, k0sArgs...); err != nil {
 		s.T().Logf("failed to start k0scontroller on %s: %v", controllerNode, err)
 		return err
 	}
 
-	return s.WaitForKubeAPI(controllerNode, getDataDirOpt(k0sArgs))
-}
-
-// initControllerStandalone initializes a controller in 'standalone' mode, meaning that
-// the k0s executable is launched directly (vs. started from a service)
-func (s *FootlooseSuite) initControllerStandalone(conn *SSHConnection, k0sArgs ...string) error {
-	umaskCmd := ""
-	if s.ControllerUmask != 0 {
-		umaskCmd = fmt.Sprintf("umask %d;", s.ControllerUmask)
+	dataDirOpt := getDataDirOpt(k0sArgs)
+	if idx == 0 {
+		s.dataDirOpt = dataDirOpt
 	}
 
-	// Allow any arch for etcd in smokes
-	cmd := fmt.Sprintf("%s ETCD_UNSUPPORTED_ARCH=%s nohup %s controller --debug %s >/tmp/k0s-controller.log 2>&1 &", umaskCmd, runtime.GOARCH, s.K0sFullPath, strings.Join(k0sArgs, " "))
-
-	if _, err := conn.ExecWithOutput(cmd); err != nil {
-		return fmt.Errorf("unable to execute '%s': %w", cmd, err)
-	}
-
-	return nil
-}
-
-// initControllerOpenRC initializes a controller in 'openrc' mode, meaning that
-// the k0s executable is launched as a service managed by openrc.
-func (s *FootlooseSuite) initControllerOpenRC(conn *SSHConnection, k0sArgs ...string) error {
-	if err := s.installK0sServiceOpenRC(conn, "controller"); err != nil {
-		return fmt.Errorf("unable to install openrc k0s controller: %w", err)
-	}
-
-	// Configure k0s as a controller w/args
-	controllerArgs := fmt.Sprintf("controller --debug %s", strings.Join(k0sArgs, " "))
-	if err := configureK0sServiceArgs(conn, "controller", controllerArgs); err != nil {
-		return fmt.Errorf("failed to configure k0s with '%s'", controllerArgs)
-	}
-
-	cmd := "/etc/init.d/k0scontroller start"
-	if _, err := conn.ExecWithOutput(cmd); err != nil {
-		return fmt.Errorf("unable to execute '%s': %w", cmd, err)
-	}
-
-	return nil
-}
-
-// installK0sServiceOpenRC will install an openrc k0s-type service (controller/worker)
-// if it does not already exist.
-func (s *FootlooseSuite) installK0sServiceOpenRC(conn *SSHConnection, k0sType string) error {
-	existsCommand := fmt.Sprintf("/usr/bin/file /etc/init.d/k0s%s", k0sType)
-	if _, err := conn.ExecWithOutput(existsCommand); err != nil {
-		cmd := fmt.Sprintf("%s install %s", s.K0sFullPath, k0sType)
-		if _, err := conn.ExecWithOutput(cmd); err != nil {
-			return fmt.Errorf("unable to execute '%s': %w", cmd, err)
-		}
-	}
-
-	return nil
-}
-
-// configureK0sServiceArgs performs some reconfiguring of the `/etc/init.d/k0s[controller|worker]`
-// startup script to allow for different configurations at test time, using the same base
-// image.
-func configureK0sServiceArgs(conn *SSHConnection, k0sType string, args string) error {
-	k0sServiceFile := fmt.Sprintf("/etc/init.d/k0s%s", k0sType)
-	cmd := fmt.Sprintf("sed -i 's#^command_args=.*$#command_args=\"%s\"#g' %s", args, k0sServiceFile)
-
-	_, err := conn.ExecWithOutput(cmd)
-	if err != nil {
-		return fmt.Errorf("failed to execute '%s' on %s: %w", cmd, conn.Address, err)
-	}
-
-	return nil
+	return s.WaitForKubeAPI(controllerNode, dataDirOpt)
 }
 
 // GetJoinToken generates join token for the asked role
@@ -585,7 +640,7 @@ func (s *FootlooseSuite) GetJoinToken(role string, extraArgs ...string) (string,
 	defer ssh.Disconnect()
 
 	tokenCmd := fmt.Sprintf("%s token create --role=%s %s 2>/dev/null", s.K0sFullPath, role, strings.Join(extraArgs, " "))
-	token, err := ssh.ExecWithOutput(tokenCmd)
+	token, err := ssh.ExecWithOutput(s.Context(), tokenCmd)
 	if err != nil {
 		return "", fmt.Errorf("can't get join token: %v", err)
 	}
@@ -614,48 +669,11 @@ func (s *FootlooseSuite) RunWorkersWithToken(token string, args ...string) error
 		}
 		defer sshWorker.Disconnect()
 
-		if err := s.launchDelegate.InitWorker(sshWorker, token, args...); err != nil {
+		if err := s.launchDelegate.InitWorker(s.Context(), sshWorker, token, args...); err != nil {
 			s.T().Logf("failed to start k0sworker on %s: %v", workerNode, err)
 			return err
 		}
 	}
-	return nil
-}
-
-// initWorkerStandalone initializes a worker in 'standalone' mode, meaning that
-// the k0s executable is launched directly (vs. started from a service)
-func (s *FootlooseSuite) initWorkerStandalone(conn *SSHConnection, token string, k0sArgs ...string) error {
-	if token == "" {
-		return fmt.Errorf("got empty token for worker join")
-	}
-
-	cmd := fmt.Sprintf(`nohup %s worker --debug %s "%s" >/tmp/k0s-worker.log 2>&1 &`, s.K0sFullPath, strings.Join(k0sArgs, " "), token)
-	if _, err := conn.ExecWithOutput(cmd); err != nil {
-		return fmt.Errorf("unable to execute '%s': %w", cmd, err)
-	}
-
-	return nil
-}
-
-// initWorkerOpenRC initializes a worker in 'openrc' mode, meaning that
-// the k0s executable is launched as a service managed by openrc.
-func (s *FootlooseSuite) initWorkerOpenRC(conn *SSHConnection, token string, k0sArgs ...string) error {
-	if err := s.installK0sServiceOpenRC(conn, "worker"); err != nil {
-		return fmt.Errorf("unable to install openrc k0s worker: %w", err)
-	}
-
-	// Configure k0s as a worker w/args
-	workerArgs := fmt.Sprintf("worker --debug %s %s", strings.Join(k0sArgs, " "), token)
-
-	if err := configureK0sServiceArgs(conn, "worker", workerArgs); err != nil {
-		return fmt.Errorf("failed to configure k0s with '%s'", workerArgs)
-	}
-
-	cmd := "/etc/init.d/k0sworker start"
-	if _, err := conn.ExecWithOutput(cmd); err != nil {
-		return fmt.Errorf("unable to execute '%s': %w", cmd, err)
-	}
-
 	return nil
 }
 
@@ -678,7 +696,7 @@ func (s *FootlooseSuite) SSH(node string) (*SSHConnection, error) {
 		KeyPath: s.clusterConfig.Cluster.PrivateKey,
 	}
 
-	err = ssh.Connect()
+	err = ssh.Connect(s.Context())
 	if err != nil {
 		return nil, err
 	}
@@ -711,72 +729,37 @@ func (s *FootlooseSuite) StopController(name string) error {
 	defer ssh.Disconnect()
 	s.T().Log("killing k0s")
 
-	return s.launchDelegate.StopController(ssh)
+	return s.launchDelegate.StopController(s.Context(), ssh)
 }
 
-// stopControllerStandalone stops a k0s controller that was started standalone.
-func (s *FootlooseSuite) stopControllerStandalone(conn *SSHConnection) error {
-	stopCommand := fmt.Sprintf("kill $(pidof %s | tr \" \" \"\\n\" | sort -n | head -n1) && while pidof %s; do sleep 0.1s; done", s.K0sFullPath, s.K0sFullPath)
-	if _, err := conn.ExecWithOutput(stopCommand); err != nil {
-		return fmt.Errorf("unable to execute '%s': %w", stopCommand, err)
-	}
-
-	return nil
+func (s *FootlooseSuite) StartController(name string) error {
+	ssh, err := s.SSH(name)
+	s.Require().NoError(err)
+	defer ssh.Disconnect()
+	return s.launchDelegate.StartController(s.Context(), ssh)
 }
 
-// stopControllerOpenRC stops a k0s controller that was started using openrc.
-func (s *FootlooseSuite) stopControllerOpenRC(conn *SSHConnection) error {
-	startCmd := "/etc/init.d/k0scontroller stop"
-	if _, err := conn.ExecWithOutput(startCmd); err != nil {
-		return fmt.Errorf("unable to execute '%s': %w", startCmd, err)
-	}
+func (s *FootlooseSuite) StartWorker(name string) error {
+	ssh, err := s.SSH(name)
+	s.Require().NoError(err)
+	defer ssh.Disconnect()
+	return s.launchDelegate.StartWorker(s.Context(), ssh)
+}
 
-	return nil
+func (s *FootlooseSuite) StopWorker(name string) error {
+	ssh, err := s.SSH(name)
+	s.Require().NoError(err)
+	defer ssh.Disconnect()
+	return s.launchDelegate.StopWorker(s.Context(), ssh)
 }
 
 func (s *FootlooseSuite) Reset(name string) error {
 	ssh, err := s.SSH(name)
-	s.NoError(err)
+	s.Require().NoError(err)
 	defer ssh.Disconnect()
 	resetCommand := fmt.Sprintf("%s reset --debug", s.K0sFullPath)
-	_, err = ssh.ExecWithOutput(resetCommand)
+	_, err = ssh.ExecWithOutput(s.Context(), resetCommand)
 	return err
-}
-
-// GetKubeClientConfig returns the kubeconfig as clientcmdapi.Config struct so it can be used and loaded with clientsets directly
-func (s *FootlooseSuite) GetKubeClientConfig(node string, k0sKubeconfigArgs ...string) (*clientcmdapi.Config, error) {
-	machine, err := s.MachineForName(node)
-	if err != nil {
-		return nil, err
-	}
-	ssh, err := s.SSH(node)
-	if err != nil {
-		return nil, err
-	}
-	defer ssh.Disconnect()
-
-	kubeConfigCmd := fmt.Sprintf("%s kubeconfig admin %s 2>/dev/null", s.K0sFullPath, strings.Join(k0sKubeconfigArgs, " "))
-	kubeConf, err := ssh.ExecWithOutput(kubeConfigCmd)
-	if err != nil {
-		return nil, err
-	}
-	cfg, err := clientcmd.Load([]byte(kubeConf))
-	s.Require().NoError(err)
-
-	hostURL, err := url.Parse(cfg.Clusters["local"].Server)
-	if err != nil {
-		return nil, fmt.Errorf("can't parse port value `%s`: %w", cfg.Clusters["local"].Server, err)
-	}
-	port, err := strconv.ParseInt(hostURL.Port(), 10, 32)
-	if err != nil {
-		return nil, fmt.Errorf("can't parse port value `%s`: %w", hostURL.Port(), err)
-	}
-	hostPort, err := machine.HostPort(int(port))
-	if err != nil {
-		return nil, fmt.Errorf("footloose machine has to have %d port mapped: %w", port, err)
-	}
-	cfg.Clusters["local"].Server = fmt.Sprintf("https://localhost:%d", hostPort)
-	return cfg, nil
 }
 
 // KubeClient return kube client by loading the admin access config from given node
@@ -792,7 +775,7 @@ func (s *FootlooseSuite) GetKubeConfig(node string, k0sKubeconfigArgs ...string)
 	defer ssh.Disconnect()
 
 	kubeConfigCmd := fmt.Sprintf("%s kubeconfig admin %s 2>/dev/null", s.K0sFullPath, strings.Join(k0sKubeconfigArgs, " "))
-	kubeConf, err := ssh.ExecWithOutput(kubeConfigCmd)
+	kubeConf, err := ssh.ExecWithOutput(s.Context(), kubeConfigCmd)
 	if err != nil {
 		return nil, err
 	}
@@ -829,7 +812,7 @@ func (s *FootlooseSuite) CreateUserAndGetKubeClientConfig(node string, username 
 	defer ssh.Disconnect()
 
 	kubeConfigCmd := fmt.Sprintf("%s kubeconfig create %s %s 2>/dev/null", s.K0sFullPath, username, strings.Join(k0sKubeconfigArgs, " "))
-	kubeConf, err := ssh.ExecWithOutput(kubeConfigCmd)
+	kubeConf, err := ssh.ExecWithOutput(s.Context(), kubeConfigCmd)
 	if err != nil {
 		return nil, err
 	}
@@ -881,28 +864,18 @@ func (s *FootlooseSuite) ExtensionsClient(node string, k0sKubeconfigArgs ...stri
 }
 
 // WaitForNodeReady wait that we see the given node in "Ready" state in kubernetes API
-func (s *FootlooseSuite) WaitForNodeReady(node string, kc *kubernetes.Clientset) error {
-	s.T().Logf("waiting to see %s ready in kube API", node)
-	return Poll(s.ctx, func(ctx context.Context) (done bool, err error) {
-		n, err := kc.CoreV1().Nodes().Get(ctx, node, v1.GetOptions{})
-		if err != nil {
-			return false, nil
-		}
-
-		for _, nc := range n.Status.Conditions {
-			if nc.Type == "Ready" && nc.Status == "True" {
-				s.T().Logf("%s is Ready in API", node)
-				return true, nil
-			}
-		}
-
-		return false, nil
-	})
+func (s *FootlooseSuite) WaitForNodeReady(name string, kc kubernetes.Interface) error {
+	s.T().Logf("waiting to see %s ready in kube API", name)
+	if err := WaitForNodeReadyStatus(s.Context(), kc, name, corev1.ConditionTrue); err != nil {
+		return err
+	}
+	s.T().Logf("%s is ready in API", name)
+	return nil
 }
 
 // GetNodeLabels return the labels of given node
 func (s *FootlooseSuite) GetNodeLabels(node string, kc *kubernetes.Clientset) (map[string]string, error) {
-	n, err := kc.CoreV1().Nodes().Get(s.ctx, node, v1.GetOptions{})
+	n, err := kc.CoreV1().Nodes().Get(s.Context(), node, metav1.GetOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -912,25 +885,27 @@ func (s *FootlooseSuite) GetNodeLabels(node string, kc *kubernetes.Clientset) (m
 
 // WaitForNodeLabel waits for label be assigned to the node
 func (s *FootlooseSuite) WaitForNodeLabel(kc *kubernetes.Clientset, node, labelKey, labelValue string) error {
-	return Poll(s.ctx, func(context.Context) (done bool, err error) {
-		labels, err := s.GetNodeLabels(node, kc)
-		if err != nil {
-			return false, nil
-		}
+	return watch.Nodes(kc.CoreV1().Nodes()).
+		WithObjectName(node).
+		WithErrorCallback(RetryWatchErrors(s.T().Logf)).
+		Until(s.Context(), func(node *corev1.Node) (bool, error) {
+			for k, v := range node.Labels {
+				if labelKey == k {
+					if labelValue == v {
+						return true, nil
+					}
 
-		for k, v := range labels {
-			if labelKey == k && labelValue == v {
-				return true, nil
+					break
+				}
 			}
-		}
 
-		return false, nil
-	})
+			return false, nil
+		})
 }
 
 // GetNodeLabels return the labels of given node
 func (s *FootlooseSuite) GetNodeAnnotations(node string, kc *kubernetes.Clientset) (map[string]string, error) {
-	n, err := kc.CoreV1().Nodes().Get(s.ctx, node, v1.GetOptions{})
+	n, err := kc.CoreV1().Nodes().Get(s.Context(), node, metav1.GetOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -939,26 +914,26 @@ func (s *FootlooseSuite) GetNodeAnnotations(node string, kc *kubernetes.Clientse
 
 // AddNodeLabel adds a label to the provided node.
 func (s *FootlooseSuite) AddNodeLabel(node string, kc *kubernetes.Clientset, key string, value string) (*corev1.Node, error) {
-	return nodeValuePatchAdd(s.ctx, node, kc, "/metadata/labels", key, value)
+	return nodeValuePatchAdd(s.Context(), node, kc, "/metadata/labels", key, value)
 }
 
 // AddNodeAnnotation adds an annotation to the provided node.
 func (s *FootlooseSuite) AddNodeAnnotation(node string, kc *kubernetes.Clientset, key string, value string) (*corev1.Node, error) {
-	return nodeValuePatchAdd(s.ctx, node, kc, "/metadata/annotations", key, value)
+	return nodeValuePatchAdd(s.Context(), node, kc, "/metadata/annotations", key, value)
 }
 
 // nodeValuePatchAdd patch-adds a key/value to a specific path via the Node API
 func nodeValuePatchAdd(ctx context.Context, node string, kc *kubernetes.Clientset, path string, key string, value string) (*corev1.Node, error) {
 	keyPath := fmt.Sprintf("%s/%s", path, jsonpointer.Escape(key))
 	patch := fmt.Sprintf(`[{"op":"add", "path":"%s", "value":"%s" }]`, keyPath, value)
-	return kc.CoreV1().Nodes().Patch(ctx, node, types.JSONPatchType, []byte(patch), v1.PatchOptions{})
+	return kc.CoreV1().Nodes().Patch(ctx, node, types.JSONPatchType, []byte(patch), metav1.PatchOptions{})
 }
 
 // WaitForKubeAPI waits until we see kube API online on given node.
 // Timeouts with error return in 5 mins
 func (s *FootlooseSuite) WaitForKubeAPI(node string, k0sKubeconfigArgs ...string) error {
 	s.T().Logf("waiting for kube api to start on node %s", node)
-	return Poll(s.ctx, func(context.Context) (done bool, err error) {
+	return Poll(s.Context(), func(context.Context) (done bool, err error) {
 		kc, err := s.KubeClient(node, k0sKubeconfigArgs...)
 		if err != nil {
 			s.T().Logf("kube-client error: %v", err)
@@ -969,7 +944,7 @@ func (s *FootlooseSuite) WaitForKubeAPI(node string, k0sKubeconfigArgs ...string
 			s.T().Logf("server version error: %v", err)
 			return false, nil
 		}
-		ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
+		ctx, cancel := context.WithTimeout(s.Context(), 5*time.Second)
 		defer cancel()
 		res := kc.RESTClient().Get().RequestURI("/readyz").Do(ctx)
 		if res.Error() != nil {
@@ -992,7 +967,7 @@ func (s *FootlooseSuite) WaitForKubeAPI(node string, k0sKubeconfigArgs ...string
 // Timeouts with error return in 5 mins
 func (s *FootlooseSuite) WaitJoinAPI(node string) error {
 	s.T().Logf("waiting for join api to start on node %s", node)
-	return Poll(s.ctx, func(context.Context) (done bool, err error) {
+	return Poll(s.Context(), func(context.Context) (done bool, err error) {
 		joinAPIStatus, err := s.GetHTTPStatus(node, "/v1beta1/ca")
 		if err != nil {
 			return false, nil
@@ -1034,7 +1009,7 @@ func (s *FootlooseSuite) GetHTTPStatus(node string, path string) (int, error) {
 func (s *FootlooseSuite) initializeFootlooseCluster() error {
 	dir, err := os.MkdirTemp("", s.T().Name()+"-footloose.")
 	if err != nil {
-		return errors.Wrap(err, "failed to create temporary directory for footloose configuration")
+		return fmt.Errorf("failed to create temporary directory for footloose configuration: %w", err)
 	}
 
 	err = s.initializeFootlooseClusterInDir(dir)
@@ -1053,7 +1028,7 @@ func (s *FootlooseSuite) GetKubeletCMDLine(node string) (string, error) {
 	}
 	defer ssh.Disconnect()
 
-	output, err := ssh.ExecWithOutput(`cat /proc/$(pidof kubelet)/cmdline`)
+	output, err := ssh.ExecWithOutput(s.Context(), `cat /proc/$(pidof kubelet)/cmdline`)
 	if err != nil {
 		return "", err
 	}
@@ -1066,36 +1041,60 @@ func (s *FootlooseSuite) initializeFootlooseClusterInDir(dir string) error {
 	if binPath == "" {
 		return errors.New("failed to locate k0s binary: K0S_PATH environment variable not set")
 	}
-	airgapPath := os.Getenv("K0S_IMAGES_BUNDLE")
 
 	fileInfo, err := os.Stat(binPath)
 	if err != nil {
-		return errors.Wrapf(err, "failed to locate k0s binary %s", binPath)
+		return fmt.Errorf("failed to locate k0s binary %s: %w", binPath, err)
 	}
 	if fileInfo.IsDir() {
-		return errors.Errorf("failed to locate k0s binary %s: is a directory", binPath)
+		return fmt.Errorf("failed to locate k0s binary %s: is a directory", binPath)
 	}
 
 	volumes := []config.Volume{
-		{
-			Type:        "bind",
-			Source:      binPath,
-			Destination: k0sBindMountFullPath,
-			ReadOnly:    true,
-		},
 		{
 			Type:        "volume",
 			Destination: "/var/lib/k0s",
 		},
 	}
 
-	if airgapPath != "" {
+	updateFromBinPath := os.Getenv("K0S_UPDATE_FROM_PATH")
+	if updateFromBinPath != "" {
 		volumes = append(volumes, config.Volume{
 			Type:        "bind",
-			Source:      airgapPath,
-			Destination: k0sAirgapBindMountFullPath,
+			Source:      updateFromBinPath,
+			Destination: k0sBindMountFullPath,
+			ReadOnly:    true,
+		}, config.Volume{
+			Type:        "bind",
+			Source:      binPath,
+			Destination: k0sNewBindMountFullPath,
 			ReadOnly:    true,
 		})
+	} else {
+		volumes = append(volumes, config.Volume{
+			Type:        "bind",
+			Source:      binPath,
+			Destination: k0sBindMountFullPath,
+			ReadOnly:    true,
+		})
+	}
+
+	if len(s.AirgapImageBundleMountPoints) > 0 {
+		airgapPath, ok := os.LookupEnv("K0S_IMAGES_BUNDLE")
+		if !ok {
+			return errors.New("cannot bind-mount airgap image bundle, environment variable K0S_IMAGES_BUNDLE not set")
+		} else if !file.Exists(airgapPath) {
+			return fmt.Errorf("cannot bind-mount airgap image bundle, no such file: %q", airgapPath)
+		}
+
+		for _, dest := range s.AirgapImageBundleMountPoints {
+			volumes = append(volumes, config.Volume{
+				Type:        "bind",
+				Source:      airgapPath,
+				Destination: dest,
+				ReadOnly:    true,
+			})
+		}
 	}
 
 	// Ensure that kernel config is available in the footloose boxes.
@@ -1234,22 +1233,22 @@ func (s *FootlooseSuite) initializeFootlooseClusterInDir(dir string) error {
 
 	footlooseYaml, err := yaml.Marshal(cfg)
 	if err != nil {
-		return errors.Wrap(err, "failed to marshal footloose configuration")
+		return fmt.Errorf("failed to marshal footloose configuration: %w", err)
 	}
 
 	if err = os.WriteFile(path.Join(dir, "footloose.yaml"), footlooseYaml, 0700); err != nil {
-		return errors.Wrap(err, "failed to write footloose configuration to file")
+		return fmt.Errorf("failed to write footloose configuration to file: %w", err)
 	}
 
 	cluster, err := cluster.New(cfg)
 	if err != nil {
-		return errors.Wrap(err, "failed to setup a new footloose cluster")
+		return fmt.Errorf("failed to setup a new footloose cluster: %w", err)
 	}
 
 	// we first try to delete instances from previous runs, if they happen to exist
 	_ = cluster.Delete()
 	if err := cluster.Create(); err != nil {
-		return errors.Wrap(err, "failed to create footloose cluster")
+		return fmt.Errorf("failed to create footloose cluster: %w", err)
 	}
 
 	s.clusterDir = dir
@@ -1284,12 +1283,16 @@ func (s *FootlooseSuite) GetControllerIPAddress(idx int) string {
 	return s.getIPAddress(s.ControllerNode(idx))
 }
 
+func (s *FootlooseSuite) GetWorkerIPAddress(idx int) string {
+	return s.getIPAddress(s.WorkerNode(idx))
+}
+
 func (s *FootlooseSuite) GetLBAddress() string {
-	return s.getIPAddress(s.LBNode(0))
+	return s.getIPAddress(s.LBNode())
 }
 
 func (s *FootlooseSuite) GetExternalEtcdIPAddress() string {
-	return s.getIPAddress(s.ExternalEtcd(0))
+	return s.getIPAddress(s.ExternalEtcdNode())
 }
 
 func (s *FootlooseSuite) getIPAddress(nodeName string) string {
@@ -1297,71 +1300,42 @@ func (s *FootlooseSuite) getIPAddress(nodeName string) string {
 	s.Require().NoError(err)
 	defer ssh.Disconnect()
 
-	ipAddress, err := ssh.ExecWithOutput("hostname -i")
+	ipAddress, err := ssh.ExecWithOutput(s.Context(), "hostname -i")
 	s.Require().NoError(err)
 	return ipAddress
-}
-
-type LaunchMode string
-
-const (
-	LaunchModeStandalone LaunchMode = "standalone"
-	LaunchModeOpenRC     LaunchMode = "openrc"
-)
-
-// LaunchDelegate provides an indirection to the launch operations in footloosesuite
-// so that alternate behaviour can be performed.
-type LaunchDelegate struct {
-	InitController func(conn *SSHConnection, k0sArgs ...string) error
-	StopController func(conn *SSHConnection) error
-	InitWorker     func(conn *SSHConnection, token string, k0sArgs ...string) error
-}
-
-// StandaloneLaunchDelegate creates a footloosesuite LaunchDelegate that starts controllers/workers
-// in a 'standalone' mode, ie. not run from a service.
-func (s *FootlooseSuite) StandaloneLaunchDelegate() *LaunchDelegate {
-	return &LaunchDelegate{
-		InitController: func(conn *SSHConnection, k0sArgs ...string) error {
-			return s.initControllerStandalone(conn, k0sArgs...)
-		},
-		StopController: func(conn *SSHConnection) error {
-			return s.stopControllerStandalone(conn)
-		},
-		InitWorker: func(conn *SSHConnection, token string, k0sArgs ...string) error {
-			return s.initWorkerStandalone(conn, token, k0sArgs...)
-		},
-	}
-}
-
-// OpenRCLaunchDelegate creates a footloosesuite LaunchDelegate that starts controllers/workers
-// via an openrc service.
-func (s *FootlooseSuite) OpenRCLaunchDelegate() *LaunchDelegate {
-	return &LaunchDelegate{
-		InitController: func(conn *SSHConnection, k0sArgs ...string) error {
-			return s.initControllerOpenRC(conn, k0sArgs...)
-		},
-		StopController: func(conn *SSHConnection) error {
-			return s.stopControllerOpenRC(conn)
-		},
-		InitWorker: func(conn *SSHConnection, token string, k0sArgs ...string) error {
-			return s.initWorkerOpenRC(conn, token, k0sArgs...)
-		},
-	}
 }
 
 // CreateNetwork creates a docker network with the provided name, destroying
 // any network that has the same name first.
 func (s *FootlooseSuite) CreateNetwork(name string) error {
-	_ = s.DestroyNetwork(name)
+	// Don't create the network if it already exists as it might be in use from previous tests
+	// ran with K0S_KEEP_AFTER_TEST variable set.
+	if s.NetworkExists(name) {
+		return nil
+	}
 
-	cmd := exec.Command("/usr/bin/docker", "network", "create", name)
+	cmd := exec.Command("docker", "network", "create", name)
 	return cmd.Run()
 }
 
-// DestroyNetwork removes a docker network with the provided name.
-func (s *FootlooseSuite) DestroyNetwork(name string) error {
-	cmd := exec.Command("/usr/bin/docker", "network", "rm", name)
+// MaybeDestroyNetwork removes a docker network with the provided name.
+// The network might not get removed if there's still containers attached to it.
+// This is the case for example when running the tests with K0S_KEEP_AFTER_TEST=always.
+func (s *FootlooseSuite) MaybeDestroyNetwork(name string) error {
+	// If we're supposed to leave the footloose containers running, don't try to destroy the network
+	if keepEnvironment(s.T()) {
+		return nil
+	}
+	cmd := exec.Command("docker", "network", "rm", name)
 	return cmd.Run()
+}
+
+// NetworkExists returns true if a docker network with the provided name exists.
+func (s *FootlooseSuite) NetworkExists(name string) bool {
+	cmd := exec.Command("docker", "network", "inspect", name)
+	err := cmd.Run()
+
+	return err == nil
 }
 
 // RunCommandController runs a command via SSH on a specified controller node
@@ -1370,7 +1344,7 @@ func (s *FootlooseSuite) RunCommandController(idx int, command string) (string, 
 	s.Require().NoError(err)
 	defer ssh.Disconnect()
 
-	return ssh.ExecWithOutput(command)
+	return ssh.ExecWithOutput(s.Context(), command)
 }
 
 // RunCommandWorker runs a command via SSH on a specified controller node
@@ -1379,7 +1353,7 @@ func (s *FootlooseSuite) RunCommandWorker(idx int, command string) (string, erro
 	s.Require().NoError(err)
 	defer ssh.Disconnect()
 
-	return ssh.ExecWithOutput(command)
+	return ssh.ExecWithOutput(s.Context(), command)
 }
 
 // GetK0sVersion returns the `k0s version` output from a specific node.
@@ -1390,7 +1364,7 @@ func (s *FootlooseSuite) GetK0sVersion(node string) (string, error) {
 	}
 	defer ssh.Disconnect()
 
-	version, err := ssh.ExecWithOutput("/usr/local/bin/k0s version")
+	version, err := ssh.ExecWithOutput(s.Context(), "/usr/local/bin/k0s version")
 	if err != nil {
 		return "", err
 	}
@@ -1403,18 +1377,17 @@ func (s *FootlooseSuite) GetMembers(idx int) map[string]string {
 	// our etcd instances doesn't listen on public IP, so test is performed by calling CLI tools over ssh
 	// which in general even makes sense, we can test tooling as well
 	sshCon, err := s.SSH(s.ControllerNode(idx))
-	s.NoError(err)
+	s.Require().NoError(err)
 	defer sshCon.Disconnect()
-	output, err := sshCon.ExecWithOutput("/usr/local/bin/k0s etcd member-list")
+	output, err := sshCon.ExecWithOutput(s.Context(), "/usr/local/bin/k0s etcd member-list")
+	s.Require().NoError(err)
 	output = lastLine(output)
-	s.NoError(err)
 
 	members := struct {
 		Members map[string]string `json:"members"`
 	}{}
 
-	err = json.Unmarshal([]byte(output), &members)
-	s.NoError(err, err)
+	s.Require().NoError(json.Unmarshal([]byte(output), &members))
 
 	return members.Members
 }
@@ -1450,7 +1423,18 @@ func (s *FootlooseSuite) GetUpdateServerIPAddress() string {
 	s.Require().NoError(err)
 	defer ssh.Disconnect()
 
-	ipAddress, err := ssh.ExecWithOutput("hostname -i")
+	ipAddress, err := ssh.ExecWithOutput(s.Context(), "hostname -i")
 	s.Require().NoError(err)
 	return ipAddress
+}
+
+func (s *FootlooseSuite) AssertSomeKubeSystemPods(client *kubernetes.Clientset) bool {
+	if pods, err := client.CoreV1().Pods("kube-system").List(s.Context(), v1.ListOptions{
+		Limit: 100,
+	}); s.NoError(err) {
+		s.T().Logf("Found %d pods in kube-system", len(pods.Items))
+		return s.NotEmpty(pods.Items, "Expected to see some pods in kube-system namespace")
+	}
+
+	return false
 }

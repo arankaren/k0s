@@ -13,13 +13,13 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package runtime
 
 import (
+	"fmt"
 	"os/exec"
 	"strings"
-
-	"github.com/pkg/errors"
 )
 
 var _ ContainerRuntime = (*DockerRuntime)(nil)
@@ -31,7 +31,7 @@ type DockerRuntime struct {
 func (d *DockerRuntime) ListContainers() ([]string, error) {
 	out, err := exec.Command("docker", "--host", d.criSocketPath, "ps", "-a", "--filter", "name=k8s_", "-q").CombinedOutput()
 	if err != nil {
-		return nil, errors.Wrapf(err, "failed to list containers: output: %s, error", string(out))
+		return nil, fmt.Errorf("failed to list containers: output: %s: %w", string(out), err)
 	}
 	return strings.Fields(string(out)), nil
 }
@@ -39,7 +39,7 @@ func (d *DockerRuntime) ListContainers() ([]string, error) {
 func (d *DockerRuntime) RemoveContainer(id string) error {
 	out, err := exec.Command("docker", "--host", d.criSocketPath, "rm", "--volumes", id).CombinedOutput()
 	if err != nil {
-		return errors.Wrapf(err, "failed to remove container %s: output: %s, error", id, string(out))
+		return fmt.Errorf("failed to remove container %s: output: %s: %w", id, string(out), err)
 	}
 	return nil
 }
@@ -47,7 +47,7 @@ func (d *DockerRuntime) RemoveContainer(id string) error {
 func (d *DockerRuntime) StopContainer(id string) error {
 	out, err := exec.Command("docker", "--host", d.criSocketPath, "stop", id).CombinedOutput()
 	if err != nil {
-		return errors.Wrapf(err, "failed to stop running container %s: output: %s, error", id, string(out))
+		return fmt.Errorf("failed to stop running container %s: output: %s: %w", id, string(out), err)
 	}
 	return nil
 }

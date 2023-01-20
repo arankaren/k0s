@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package controller
 
 import (
@@ -20,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
+	"github.com/k0sproject/k0s/pkg/constant"
 	"github.com/stretchr/testify/require"
 	"sigs.k8s.io/yaml"
 )
@@ -32,6 +34,7 @@ func (i inMemorySaver) Save(dst string, content []byte) error {
 }
 
 func TestCalicoManifests(t *testing.T) {
+	k0sVars := constant.GetConfig(t.TempDir())
 	clusterConfig := v1beta1.DefaultClusterConfig()
 	clusterConfig.Spec.Network.Calico = v1beta1.DefaultCalico()
 	clusterConfig.Spec.Network.Provider = "calico"
@@ -41,7 +44,7 @@ func TestCalicoManifests(t *testing.T) {
 		saver := inMemorySaver{}
 		crdSaver := inMemorySaver{}
 		calico := NewCalico(k0sVars, crdSaver, saver)
-		require.NoError(t, calico.Run(context.Background()))
+		require.NoError(t, calico.Start(context.Background()))
 		require.NoError(t, calico.Stop())
 
 		for k := range crdSaver {

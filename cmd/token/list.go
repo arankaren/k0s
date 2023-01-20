@@ -13,29 +13,36 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package token
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/k0sproject/k0s/pkg/config"
 	"github.com/k0sproject/k0s/pkg/token"
+
 	"github.com/olekukonko/tablewriter"
 	"github.com/spf13/cobra"
 )
 
-var listTokenRole string
-
 func tokenListCmd() *cobra.Command {
+	var listTokenRole string
+
 	cmd := &cobra.Command{
 		Use:     "list",
 		Short:   "List join tokens",
 		Example: `k0s token list --role worker // list worker tokens`,
-		PreRunE: checkListTokenRole,
+		PreRunE: func(cmd *cobra.Command, args []string) error {
+			err := checkTokenRole(listTokenRole)
+			if err != nil {
+				cmd.SilenceUsage = true
+			}
+			return err
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c := CmdOpts(config.GetCmdOpts())
+			c := config.GetCmdOpts()
 			manager, err := token.NewManager(filepath.Join(c.K0sVars.AdminKubeConfigPath))
 			if err != nil {
 				return err
@@ -46,12 +53,12 @@ func tokenListCmd() *cobra.Command {
 				return err
 			}
 			if len(tokens) == 0 {
-				fmt.Println("No k0s join tokens found")
+				fmt.Fprintln(cmd.OutOrStdout(), "No k0s join tokens found")
 				return nil
 			}
 
-			//fmt.Printf("Tokens: %v \n", tokens)
-			table := tablewriter.NewWriter(os.Stdout)
+			//fmt.Fprintf(cmd.OutOrStdout(), "Tokens: %v \n", tokens)
+			table := tablewriter.NewWriter(cmd.OutOrStdout())
 			table.SetHeader([]string{"ID", "Role", "Expires at"})
 			table.SetAutoWrapText(false)
 			table.SetAutoFormatHeaders(true)
@@ -76,12 +83,4 @@ func tokenListCmd() *cobra.Command {
 	cmd.Flags().StringVar(&listTokenRole, "role", "", "Either worker, controller or empty for all roles")
 	cmd.PersistentFlags().AddFlagSet(config.GetPersistentFlagSet())
 	return cmd
-}
-
-func checkListTokenRole(cmd *cobra.Command, args []string) error {
-	err := checkTokenRole(listTokenRole)
-	if err != nil {
-		cmd.SilenceUsage = true
-	}
-	return err
 }

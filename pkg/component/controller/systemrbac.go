@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package controller
 
 import (
@@ -23,7 +24,7 @@ import (
 
 	"github.com/k0sproject/k0s/internal/pkg/dir"
 	"github.com/k0sproject/k0s/internal/pkg/templatewriter"
-	"github.com/k0sproject/k0s/pkg/component"
+	"github.com/k0sproject/k0s/pkg/component/manager"
 	"github.com/k0sproject/k0s/pkg/constant"
 )
 
@@ -32,7 +33,7 @@ type SystemRBAC struct {
 	manifestDir string
 }
 
-var _ component.Component = (*SystemRBAC)(nil)
+var _ manager.Component = (*SystemRBAC)(nil)
 
 // NewSystemRBAC creates new system level RBAC reconciler
 func NewSystemRBAC(manifestDir string) *SystemRBAC {
@@ -45,7 +46,7 @@ func (s *SystemRBAC) Init(_ context.Context) error {
 }
 
 // Run reconciles the k0s related system RBAC rules
-func (s *SystemRBAC) Run(_ context.Context) error {
+func (s *SystemRBAC) Start(_ context.Context) error {
 	rbacDir := path.Join(s.manifestDir, "bootstraprbac")
 	err := dir.Init(rbacDir, constant.ManifestsDirMode)
 	if err != nil {
@@ -118,7 +119,7 @@ rules:
     resources: ["*"]
     verbs: ["*"]
   - apiGroups: [""]
-    resources: ["nodes", "pods", "pods/eviction"]
+    resources: ["nodes", "pods", "pods/eviction", "namespaces"]
     verbs: ["*"]
   - apiGroups: ["apps"]
     resources: ["*"]
@@ -137,6 +138,3 @@ subjects:
     kind: Group
     name: system:nodes
 `
-
-// Health-check interface
-func (s *SystemRBAC) Healthy() error { return nil }

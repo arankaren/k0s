@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package controller
 
 import (
@@ -21,7 +22,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/k0sproject/k0s/pkg/component"
+	"github.com/k0sproject/k0s/pkg/component/manager"
 	"github.com/k0sproject/k0s/pkg/k0scloudprovider"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
@@ -61,7 +62,7 @@ func DummyCommandBuilder(wg *sync.WaitGroup, cancelled *bool) CommandBuilder {
 
 type K0sCloudProviderSuite struct {
 	suite.Suite
-	ccp       component.Component
+	ccp       manager.Component
 	cancelled bool
 	wg        sync.WaitGroup
 }
@@ -91,19 +92,13 @@ func (suite *K0sCloudProviderSuite) TestInit() {
 func (suite *K0sCloudProviderSuite) TestRunStop() {
 	ctx := context.TODO()
 	assert.Nil(suite.T(), suite.ccp.Init(ctx))
-	assert.Nil(suite.T(), suite.ccp.Run(ctx))
+	assert.Nil(suite.T(), suite.ccp.Start(ctx))
 
 	// Ensures that the stopping mechanism actually closes the stop channel.
 	assert.Nil(suite.T(), suite.ccp.Stop())
 	suite.wg.Wait()
 
 	assert.Equal(suite.T(), true, suite.cancelled)
-}
-
-// TestHealthy covers the `Healthy()` function post-init.
-func (suite *K0sCloudProviderSuite) TestHealthy() {
-	assert.Nil(suite.T(), suite.ccp.Init(context.TODO()))
-	assert.Nil(suite.T(), suite.ccp.Healthy())
 }
 
 // TestK0sCloudProviderTestSuite sets up the suite for testing.

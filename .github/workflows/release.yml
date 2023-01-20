@@ -3,10 +3,16 @@ name: Release
 on:
   push:
     tags:
-      - 'v*' # Push events to matching v*, i.e. v1.0, v20.15.10
+      - v* # Push events to matching v*, i.e. v1.0, v20.15.10
+
+env:
+  K0SCTL_VERSION: 0.13.2
 
 jobs:
   release:
+    env:
+      TF_VAR_k0s_binary_path: "${{ github.workspace }}/k0s"
+      KUBECONFIG: ${{ github.workspace }}/kubeconfig
     name: release
     runs-on: ubuntu-latest
     outputs:
@@ -19,7 +25,7 @@ jobs:
       - name: Branch name
         id: branch_name
         run: |
-          echo ::set-output name=TAG_NAME::${GITHUB_REF#refs/tags/}
+          echo TAG_NAME="${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
       - name: Create Release
         id: create_release
         uses: actions/create-release@v1
@@ -32,14 +38,14 @@ jobs:
           prerelease: ${{ contains(github.ref, '-') }} # v0.1.2-beta1, 1.2.3-rc1
       - name: Prepare image tags
         id: image_tag
+        env:
+          TAGS: ${{ steps.branch_name.outputs.TAG_NAME }}
         # Basically just replace the '+' with '-' as '+' is not allowed in tags
         run: |
-          TAGS=${{ steps.branch_name.outputs.TAG_NAME }}
-          TAGS=${TAGS//+/-}
-          echo ::set-output name=IMAGE_TAGS::${TAGS}
+          echo IMAGE_TAGS="${TAGS//+/-}" >> $GITHUB_OUTPUT
   x64:
     needs: release
-    runs-on: [self-hosted,linux,x64]
+    runs-on: [self-hosted, linux, x64]
     env:
       SEGMENT_TOKEN: ${{ secrets.SEGMENT_WRITE_KEY_PROD }}
       EULA_NOTICE: ${{ secrets.EULA_NOTICE }}
@@ -71,8 +77,8 @@ jobs:
       - name: Run basic smoke test
         run: make check-basic
 
-      - name: Build bundle for air gap installation
-        run: make image-bundle/bundle.tar TARGET_PLATFORM=linux/amd64
+      - name: Create airgap image bundle
+        run: make airgap-image-bundle-linux-amd64.tar
 
       - name: Collect smoke test logs
         if: failure()
@@ -105,7 +111,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # This token is provided by Actions
         with:
           upload_url: ${{ needs.release.outputs.upload_url }}
-          asset_path: ./image-bundle/bundle.tar
+          asset_path: ./airgap-image-bundle-linux-amd64.tar
           asset_name: k0s-airgap-bundle-${{ needs.release.outputs.tag_name }}-amd64
           asset_content_type: application/octet-stream
 
@@ -127,7 +133,7 @@ jobs:
 
   windows:
     needs: release
-    runs-on: [self-hosted,linux,x64]
+    runs-on: [self-hosted, linux, x64]
     env:
       SEGMENT_TOKEN: ${{ secrets.SEGMENT_WRITE_KEY_PROD }}
       EULA_NOTICE: ${{ secrets.EULA_NOTICE }}
@@ -173,7 +179,7 @@ jobs:
 
   arm64:
     needs: release
-    runs-on: [self-hosted,linux,arm64]
+    runs-on: [self-hosted, linux, arm64]
     env:
       SEGMENT_TOKEN: ${{ secrets.SEGMENT_WRITE_KEY_PROD }}
       EULA_NOTICE: ${{ secrets.EULA_NOTICE }}
@@ -206,8 +212,8 @@ jobs:
       - name: Run basic smoke test
         run: make check-basic
 
-      - name: Build bundle for air gap installation
-        run: make image-bundle/bundle.tar TARGET_PLATFORM=linux/arm64
+      - name: Create airgap image bundle
+        run: make airgap-image-bundle-linux-arm64.tar
 
       - name: Collect smoke test logs
         if: failure()
@@ -240,7 +246,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # This token is provided by Actions
         with:
           upload_url: ${{ needs.release.outputs.upload_url }}
-          asset_path: ./image-bundle/bundle.tar
+          asset_path: ./airgap-image-bundle-linux-arm64.tar
           asset_name: k0s-airgap-bundle-${{ needs.release.outputs.tag_name }}-arm64
           asset_content_type: application/octet-stream
 
@@ -262,7 +268,7 @@ jobs:
 
   armv7:
     needs: release
-    runs-on: [self-hosted,linux,arm]
+    runs-on: [self-hosted, linux, arm]
     env:
       SEGMENT_TOKEN: ${{ secrets.SEGMENT_WRITE_KEY_PROD }}
       EULA_NOTICE: ${{ secrets.EULA_NOTICE }}
@@ -289,7 +295,7 @@ jobs:
           echo "Setup go stable version $GO_VERSION"
           rm -rf -- "$HOME/.local/go"
           mkdir -p -- "$HOME/.local/go"
-          curl --silent -L "https://golang.org/dl/go${GO_VERSION}.linux-armv6l.tar.gz" | tar -C "$HOME/.local" -xz
+          curl --silent -L "https://go.dev/dl/go${GO_VERSION%%.0}.linux-armv6l.tar.gz" | tar -C "$HOME/.local" -xz
 
           echo "$HOME/.local/go/bin" >>"$GITHUB_PATH"
           export PATH="$PATH:$HOME/.local/go/bin"
@@ -304,8 +310,8 @@ jobs:
       - name: Run basic smoke test
         run: make check-basic
 
-      - name: Build bundle for air gap installation
-        run: make image-bundle/bundle.tar TARGET_PLATFORM=linux/arm/v7
+      - name: Create airgap image bundle
+        run: make airgap-image-bundle-linux-arm.tar
 
       - name: Collect smoke test logs
         if: failure()
@@ -338,7 +344,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # This token is provided by Actions
         with:
           upload_url: ${{ needs.release.outputs.upload_url }}
-          asset_path: ./image-bundle/bundle.tar
+          asset_path: ./airgap-image-bundle-linux-arm.tar
           asset_name: k0s-airgap-bundle-${{ needs.release.outputs.tag_name }}-arm
           asset_content_type: application/octet-stream
 
@@ -359,10 +365,20 @@ jobs:
       - x64
       - arm64
       - armv7
-    runs-on: [self-hosted,linux,x64]
+    runs-on: [self-hosted, linux, x64]
     steps:
+      # docker context must be created prior to setting up Docker Buildx
+      # https://github.com/actions-runner-controller/actions-runner-controller/issues/893
+      - name: Set up Docker Context for Buildx
+        shell: bash
+        id: buildx-context
+        run: |
+          docker context create buildx-context
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
+        with:
+          endpoint: buildx-context
 
       - name: Run git checkout
         uses: actions/checkout@v3
@@ -388,13 +404,21 @@ jobs:
       - name: Fetch k0s arm64
         uses: actions/download-artifact@v3
         with:
-          name: k0s-amd64
+          name: k0s-arm64
           path: ./k0s-arm64
       - name: Fetch k0s arm
         uses: actions/download-artifact@v3
         with:
-          name: k0s-amd64
+          name: k0s-arm
           path: ./k0s-arm
+
+      - name: Make binaries executable
+        run: chmod +x ./k0s-*/k0s
+
+      - name: Fetch Alpine version to use
+        run: |
+          alpinePatchVersion="$(./vars.sh alpine_patch_version)"
+          echo "ALPINE_PATCH_VERSION=$alpinePatchVersion" >>"$GITHUB_ENV"
 
       - name: Build image and push to Docker Hub and GitHub image registry
         uses: docker/build-push-action@v3
@@ -404,22 +428,38 @@ jobs:
           tags: |
             ghcr.io/k0sproject/k0s:${{ needs.release.outputs.image_tag }}
             docker.io/k0sproject/k0s:${{ needs.release.outputs.image_tag }}
+          build-args: |
+            ALPINE_VERSION=${{ env.ALPINE_PATCH_VERSION }}
           push: true
 
   conformance-test:
     needs:
       - release
       - x64
+      - arm64
+    strategy:
+      matrix:
+        arch: [ amd64, arm64 ]
+        include:
+          - arch: amd64
+            instance-type: c4.xlarge
+          - arch: arm64
+            instance-type: c7g.xlarge
     env:
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       AWS_DEFAULT_REGION: eu-west-1
       TF_VERSION: 1.2.2
+      TF_VAR_k0s_binary_path: ${{ github.workspace }}/k0s/k0s
+      TF_VAR_instance_arch: ${{ matrix.arch }}
+      TF_VAR_instance_type: ${{ matrix.instance-type }}
+      KUBECONFIG: ${{ github.workspace }}/kubeconfig
+
     name: "K8s Conformance Testing"
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: ./inttest/conformance/terraform
+        working-directory: ./inttest/sonobuoy/terraform
     steps:
       - name: Run git checkout
         uses: actions/checkout@v3
@@ -444,45 +484,54 @@ jobs:
       - name: Fetch k0s Artifact
         uses: actions/download-artifact@v3
         with:
-          name: k0s-amd64
+          name: k0s-${{ matrix.arch }}
+          path: ${{ github.workspace }}/k0s
 
       - name: Launch Test Environment
         env:
-          K0S_VER: ${{ needs.release.outputs.tag_name }}
+          TF_VAR_cluster_name: "k0s_conformance"
+          TF_VAR_k0s_version: ${{ needs.release.outputs.tag_name }}
         run: |
           # Start SSH Agent
           eval `ssh-agent -s`
 
-          export TF_VAR_k0s_version=${KOS_VER}
-
           terraform apply -auto-approve
 
-      - name: Get Terraform Output Data
-        run: ./get_outputs.sh
+      - name: Create k0s Cluster using k0sctl
+        id: k0sctl
+        run: |
+          # download k0sctl
+          curl --silent -L "https://github.com/k0sproject/k0sctl/releases/download/v${K0SCTL_VERSION}/k0sctl-linux-x64" -o k0sctl
+          chmod +x ./k0sctl
+          ./k0sctl apply -c k0sctl.yaml
 
-      - name: Deploy k0s to Hosts
-        run: ./deploy-k0s.sh
+          # save kubeconfig file
+          ./k0sctl kubeconfig > $KUBECONFIG
 
       - name: Run Full Conformance Check
+        run: make check-conformance
+        working-directory: ./inttest
+
+      - name: Retrieve Sonobuoy Results
         run: |
-          make check-conformance
+          make get-conformance-results
         working-directory: ./inttest
 
       - name: Upload conformance test result to Release Assets
-        uses: shogo82148/actions-upload-release-asset@v1.6.2 # Allows us to upload a file with wildcard patterns
+        uses: shogo82148/actions-upload-release-asset@v1.6.3 # Allows us to upload a file with wildcard patterns
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ needs.release.outputs.upload_url }}
-          asset_path: inttest/sonobuoy/*_sonobuoy_*.tar.gz
-          asset_name: sonobuoy-conformance-results-${{ needs.release.outputs.tag_name }}.tar.gz
+          asset_path: inttest/*_sonobuoy_*.tar.gz
+          asset_name: sonobuoy-conformance-results-${{ matrix.arch }}-${{ needs.release.outputs.tag_name }}.tar.gz
           asset_content_type: application/gzip
+          overwrite: true # In case we need to re-run the conformance this let's us to overwrite the results tarball
         if: ${{ always() }}
       - name: Clean-Up Environment
         env:
-          K0S_VER: ${{ needs.release.outputs.tag_name }}
+          TF_VAR_cluster_name: "k0s_conformance"
+          TF_VAR_k0s_version: ${{ needs.release.outputs.tag_name }}
         run: |
-          export TF_VAR_k0s_version=${K0S_VER}
-
           terraform destroy -auto-approve
         if: ${{ always() }}

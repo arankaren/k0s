@@ -13,16 +13,16 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package extraargs
 
 import (
-	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/suite"
 
 	"github.com/k0sproject/k0s/inttest/common"
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 type ExtraArgsSuite struct {
@@ -36,23 +36,34 @@ func (s *ExtraArgsSuite) TestK0sGetsUp() {
 	s.NoError(s.RunWorkers())
 
 	kc, err := s.KubeClient(s.ControllerNode(0))
-	s.NoError(err)
+	s.Require().NoError(err)
 
 	err = s.WaitForNodeReady(s.WorkerNode(0), kc)
 	s.NoError(err)
 
-	pods, err := kc.CoreV1().Pods("kube-system").List(context.TODO(), v1.ListOptions{
-		Limit: 100,
-	})
-	s.NoError(err)
-
-	podCount := len(pods.Items)
-
-	s.T().Logf("found %d pods in kube-system", podCount)
-	s.Greater(podCount, 0, "expecting to see few pods in kube-system namespace")
+	s.AssertSomeKubeSystemPods(kc)
 
 	s.T().Log("waiting to see kube-router pods ready")
-	s.NoError(common.WaitForKubeRouterReady(kc), "kube-router did not start")
+	s.NoError(common.WaitForKubeRouterReady(s.Context(), kc), "kube-router did not start")
+
+	ssh, err := s.SSH(s.ControllerNode(0))
+	defer ssh.Disconnect()
+	s.NoError(err)
+
+	s.checkFlag(ssh, "/var/lib/k0s/bin/kube-apiserver", "--disable-admission-plugins=PodSecurity")
+	s.checkFlag(ssh, "/var/lib/k0s/bin/etcd", "--logger=zap")
+
+}
+func (s *ExtraArgsSuite) checkFlag(ssh *common.SSHConnection, processName string, flag string) {
+	s.T().Logf("Checking flag %s in process %s", flag, processName)
+	pid, err := ssh.ExecWithOutput(s.Context(), fmt.Sprintf("/usr/bin/pgrep %s", processName))
+	s.NoError(err)
+
+	flagCount, err := ssh.ExecWithOutput(s.Context(), fmt.Sprintf("/bin/grep -c -- %s /proc/%s/cmdline", flag, pid))
+	s.NoError(err)
+	if flagCount != "1" {
+		s.T().Fatalf("%s flag %s not found", processName, flag)
+	}
 
 }
 
@@ -71,6 +82,10 @@ const k0sConfig = `
 spec:
   api:
     extraArgs:
-      disable-admission-plugins: PodSecurityPolicy
-      enable-admission-plugins: NamespaceLifecycle,LimitRanger,ServiceAccount,TaintNodesByCondition,PodSecurity,Priority,DefaultTolerationSeconds,DefaultStorageClass,StorageObjectInUseProtection,PersistentVolumeClaimResize,RuntimeClass,CertificateApproval,CertificateSigning,CertificateSubjectRestriction,DefaultIngressClass,MutatingAdmissionWebhook,ValidatingAdmissionWebhook,ResourceQuota
+      disable-admission-plugins: PodSecurity
+      enable-admission-plugins: NamespaceLifecycle,LimitRanger,ServiceAccount,TaintNodesByCondition,Priority,DefaultTolerationSeconds,DefaultStorageClass,StorageObjectInUseProtection,PersistentVolumeClaimResize,RuntimeClass,CertificateApproval,CertificateSigning,CertificateSubjectRestriction,DefaultIngressClass,MutatingAdmissionWebhook,ValidatingAdmissionWebhook,ResourceQuota
+  storage:
+    etcd:
+      extraArgs:
+        logger: zap
 `

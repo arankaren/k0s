@@ -30,7 +30,7 @@ Though the Quick Start material is written for Debian/Ubuntu, you can use it for
 
     The `k0s install controller` sub-command accepts the same flags and parameters as the `k0s controller`. Refer to [manual install](k0s-multi-node.md#installation-steps) for a custom config file example.
 
-    Is's possible to set environment variables with the install command:
+    It is possible to set environment variables with the install command:
 
     ```shell
     sudo k0s install controller -e ETCD_UNSUPPORTED_ARCH=arm
@@ -61,7 +61,7 @@ Though the Quick Start material is written for Debian/Ubuntu, you can use it for
 
     ```shell
     $ sudo k0s status
-    Version: v1.24.3+k0s.0
+    Version: v1.26.0+k0s.0
     Process ID: 436
     Role: controller
     Workloads: true
@@ -77,7 +77,7 @@ Though the Quick Start material is written for Debian/Ubuntu, you can use it for
     ```shell
     $ sudo k0s kubectl get nodes
     NAME   STATUS   ROLES    AGE    VERSION
-    k0s    Ready    <none>   4m6s   v1.23.6+k0s
+    k0s    Ready    <none>   4m6s   v1.26.0+k0s
     ```
 
 ## Uninstall k0s

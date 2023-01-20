@@ -13,20 +13,22 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package controller
 
 import (
 	"context"
 	"fmt"
-	"os"
 
 	"github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
-	"github.com/k0sproject/k0s/pkg/component"
+	"github.com/k0sproject/k0s/pkg/component/manager"
 
 	"github.com/sirupsen/logrus"
 
 	kubeutil "github.com/k0sproject/k0s/pkg/kubernetes"
 	"github.com/k0sproject/k0s/pkg/leaderelection"
+
+	nodeutil "k8s.io/kubernetes/pkg/util/node"
 )
 
 // K0sControllersLeaseCounter implements a component that manages a lease per controller.
@@ -39,7 +41,7 @@ type K0sControllersLeaseCounter struct {
 	leaseCancel context.CancelFunc
 }
 
-var _ component.Component = (*K0sControllersLeaseCounter)(nil)
+var _ manager.Component = (*K0sControllersLeaseCounter)(nil)
 
 // Init initializes the component needs
 func (l *K0sControllersLeaseCounter) Init(_ context.Context) error {
@@ -47,7 +49,7 @@ func (l *K0sControllersLeaseCounter) Init(_ context.Context) error {
 }
 
 // Run runs the leader elector to keep the lease object up-to-date.
-func (l *K0sControllersLeaseCounter) Run(ctx context.Context) error {
+func (l *K0sControllersLeaseCounter) Start(ctx context.Context) error {
 	ctx, l.cancelFunc = context.WithCancel(ctx)
 	log := logrus.WithFields(logrus.Fields{"component": "controllerlease"})
 	client, err := l.KubeClientFactory.GetClient()
@@ -56,7 +58,8 @@ func (l *K0sControllersLeaseCounter) Run(ctx context.Context) error {
 	}
 
 	// hostname used to make the lease names be clear to which controller they belong to
-	holderIdentity, err := os.Hostname()
+	// follow kubelet convention for naming so we e.g. use lowercase hostname etc.
+	holderIdentity, err := nodeutil.GetHostname("")
 	if err != nil {
 		return nil
 	}
@@ -101,6 +104,3 @@ func (l *K0sControllersLeaseCounter) Stop() error {
 	}
 	return nil
 }
-
-// Healthy is a no-op healchcheck
-func (l *K0sControllersLeaseCounter) Healthy() error { return nil }

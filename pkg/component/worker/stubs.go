@@ -16,12 +16,13 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package worker
 
 import (
 	"context"
 
-	"github.com/k0sproject/k0s/pkg/component"
+	"github.com/k0sproject/k0s/pkg/component/manager"
 	"github.com/k0sproject/k0s/pkg/constant"
 )
 
@@ -32,21 +33,17 @@ type CalicoInstaller struct {
 	ClusterDNS string
 }
 
-var _ component.Component = (*CalicoInstaller)(nil)
+var _ manager.Component = (*CalicoInstaller)(nil)
 
 func (c CalicoInstaller) Init(_ context.Context) error {
 	panic("stub component is used: CalicoInstaller")
 }
 
-func (c CalicoInstaller) Run(_ context.Context) error {
+func (c CalicoInstaller) Start(_ context.Context) error {
 	panic("stub component is used: CalicoInstaller")
 }
 
 func (c CalicoInstaller) Stop() error {
-	panic("stub component is used: CalicoInstaller")
-}
-
-func (c CalicoInstaller) Healthy() error {
 	panic("stub component is used: CalicoInstaller")
 }
 
@@ -56,20 +53,16 @@ type KubeProxy struct {
 	LogLevel  string
 }
 
-var _ component.Component = (*KubeProxy)(nil)
+var _ manager.Component = (*KubeProxy)(nil)
 
 func (k KubeProxy) Init(_ context.Context) error {
 	panic("stub component is used: KubeProxy")
 }
 
-func (k KubeProxy) Run(_ context.Context) error {
+func (k KubeProxy) Start(_ context.Context) error {
 	panic("stub component is used: KubeProxy")
 }
 
 func (k KubeProxy) Stop() error {
-	panic("stub component is used: KubeProxy")
-}
-
-func (k KubeProxy) Healthy() error {
 	panic("stub component is used: KubeProxy")
 }

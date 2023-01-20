@@ -20,11 +20,11 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/k0sproject/k0s/pkg/component"
+	"github.com/k0sproject/k0s/pkg/component/manager"
 	"github.com/k0sproject/k0s/static"
 )
 
-var _ component.Component = (*CRD)(nil)
+var _ manager.Component = (*CRD)(nil)
 
 // CRD unpacks bundled CRD definitions to the filesystem
 type CRD struct {
@@ -46,7 +46,7 @@ func (c CRD) Init(_ context.Context) error {
 }
 
 // Run unpacks manifests from bindata
-func (c CRD) Run(_ context.Context) error {
+func (c CRD) Start(_ context.Context) error {
 	for _, bundle := range c.bundles {
 		crds, err := static.AssetDir(fmt.Sprintf("manifests/%s/CustomResourceDefinition", bundle))
 		if err != nil {
@@ -70,9 +70,5 @@ func (c CRD) Run(_ context.Context) error {
 }
 
 func (c CRD) Stop() error {
-	return nil
-}
-
-func (c CRD) Healthy() error {
 	return nil
 }

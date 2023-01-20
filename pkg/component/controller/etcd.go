@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package controller
 
 import (
@@ -34,7 +35,7 @@ import (
 	"github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
 	"github.com/k0sproject/k0s/pkg/assets"
 	"github.com/k0sproject/k0s/pkg/certificate"
-	"github.com/k0sproject/k0s/pkg/component"
+	"github.com/k0sproject/k0s/pkg/component/manager"
 	"github.com/k0sproject/k0s/pkg/constant"
 	"github.com/k0sproject/k0s/pkg/etcd"
 	"github.com/k0sproject/k0s/pkg/supervisor"
@@ -55,7 +56,8 @@ type Etcd struct {
 	ctx        context.Context
 }
 
-var _ component.Component = (*Etcd)(nil)
+var _ manager.Component = (*Etcd)(nil)
+var _ manager.Ready = (*Etcd)(nil)
 
 // Init extracts the needed binaries
 func (e *Etcd) Init(_ context.Context) error {
@@ -110,12 +112,12 @@ func (e *Etcd) syncEtcdConfig(peerURL, etcdCaCert, etcdCaCertKey string) ([]stri
 	if file.Exists(etcdCaCert) && file.Exists(etcdCaCertKey) {
 		logrus.Warnf("etcd ca certs already exists, not gonna overwrite. If you wish to re-sync them, delete the existing ones.")
 	} else {
-		err = os.WriteFile(etcdCaCertKey, etcdResponse.CA.Key, constant.CertSecureMode)
+		err = file.WriteContentAtomically(etcdCaCertKey, etcdResponse.CA.Key, constant.CertSecureMode)
 		if err != nil {
 			return nil, err
 		}
 
-		err = os.WriteFile(etcdCaCert, etcdResponse.CA.Cert, constant.CertSecureMode)
+		err = file.WriteContentAtomically(etcdCaCert, etcdResponse.CA.Cert, constant.CertSecureMode)
 		if err != nil {
 			return nil, err
 		}
@@ -129,7 +131,7 @@ func (e *Etcd) syncEtcdConfig(peerURL, etcdCaCert, etcdCaCertKey string) ([]stri
 }
 
 // Run runs etcd if external cluster is not configured
-func (e *Etcd) Run(ctx context.Context) error {
+func (e *Etcd) Start(ctx context.Context) error {
 	e.ctx = ctx
 	if e.Config.IsExternalClusterUsed() {
 		return nil
@@ -191,6 +193,14 @@ func (e *Etcd) Run(ctx context.Context) error {
 	if file.Exists(etcdSignKey) && file.Exists(etcdSignPub) {
 		auth := fmt.Sprintf("jwt,pub-key=%s,priv-key=%s,sign-method=RS512,ttl=10m", etcdSignPub, etcdSignKey)
 		args["--auth-token"] = auth
+	}
+
+	for name, value := range e.Config.ExtraArgs {
+		argName := fmt.Sprintf("--%s", name)
+		if _, ok := args[argName]; ok {
+			logrus.Warnf("overriding etcd flag with user provided value: %s", argName)
+		}
+		args[argName] = value
 	}
 
 	logrus.Debugf("starting etcd with args: %v", args)
@@ -281,7 +291,7 @@ func (e *Etcd) setupCerts(ctx context.Context) error {
 }
 
 // Health-check interface
-func (e *Etcd) Healthy() error {
+func (e *Etcd) Ready() error {
 	logrus.WithField("component", "etcd").Debug("checking etcd endpoint for health")
 	ctx, cancel := context.WithTimeout(e.ctx, 1*time.Second)
 	defer cancel()

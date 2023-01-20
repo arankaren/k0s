@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package controller
 
 import (
@@ -23,7 +24,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/k0sproject/k0s/pkg/component"
+	"github.com/k0sproject/k0s/pkg/component/manager"
 
 	"github.com/sirupsen/logrus"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -74,11 +75,14 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - nodes/metrics
+  verbs:
+  - get
+- apiGroups:
+  - ""
+  resources:
   - pods
   - nodes
-  - nodes/stats
-  - namespaces
-  - configmaps
   verbs:
   - get
   - list
@@ -253,8 +257,8 @@ type metricsConfig struct {
 	MEMRequest string
 }
 
-var _ component.Component = (*MetricServer)(nil)
-var _ component.ReconcilerComponent = (*MetricServer)(nil)
+var _ manager.Component = (*MetricServer)(nil)
+var _ manager.Reconciler = (*MetricServer)(nil)
 
 // NewMetricServer creates new MetricServer reconciler
 func NewMetricServer(k0sVars constant.CfgVars, kubeClientFactory k8sutil.ClientFactoryInterface) *MetricServer {
@@ -272,7 +276,7 @@ func (m *MetricServer) Init(_ context.Context) error {
 }
 
 // Run runs the metric server reconciler
-func (m *MetricServer) Run(ctx context.Context) error {
+func (m *MetricServer) Start(ctx context.Context) error {
 	ctx, m.tickerDone = context.WithCancel(ctx)
 
 	msDir := path.Join(m.K0sVars.ManifestsDir, "metricserver")
@@ -333,9 +337,6 @@ func (m *MetricServer) Reconcile(_ context.Context, clusterConfig *v1beta1.Clust
 	m.clusterConfig = clusterConfig
 	return nil
 }
-
-// Healthy is the health-check interface
-func (m *MetricServer) Healthy() error { return nil }
 
 // Mostly for calculating the resource needs based on node numbers. From https://github.com/kubernetes-sigs/metrics-server#scaling :
 // Starting from v0.5.0 Metrics Server comes with default resource requests that should guarantee good performance for most cluster configurations up to 100 nodes:

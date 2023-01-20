@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package main
 
 import (
@@ -28,7 +29,6 @@ import (
 //go:generate make codegen
 
 func init() {
-	logrus.SetOutput(os.Stderr)
 	logrus.SetLevel(logrus.WarnLevel)
 	customFormatter := new(logrus.TextFormatter)
 	customFormatter.TimestampFormat = "2006-01-02 15:04:05"

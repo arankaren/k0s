@@ -32,7 +32,7 @@ import (
 
 	"github.com/avast/retry-go"
 	"github.com/gorilla/mux"
-	"github.com/k0sproject/k0s/pkg/component"
+	"github.com/k0sproject/k0s/pkg/component/manager"
 	"github.com/sirupsen/logrus"
 
 	corev1 "k8s.io/api/core/v1"
@@ -101,10 +101,12 @@ type staticPods struct {
 	stopped     sync.WaitGroup
 }
 
+var _ manager.Ready = (*staticPods)(nil)
+
 // NewStaticPods creates a new static_pods component.
 func NewStaticPods() interface {
 	StaticPods
-	component.Component
+	manager.Component
 } {
 	staticPods := &staticPods{
 		log:         logrus.WithFields(logrus.Fields{"component": "static_pods"}),
@@ -333,7 +335,7 @@ func (s *staticPods) Init(context.Context) error {
 	return nil
 }
 
-func (s *staticPods) Run(ctx context.Context) error {
+func (s *staticPods) Start(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -476,7 +478,7 @@ func (s *staticPods) Stop() error {
 }
 
 // Health-check interface
-func (s *staticPods) Healthy() error {
+func (s *staticPods) Ready() error {
 	url, err := s.ManifestURL()
 	if err != nil {
 		return err

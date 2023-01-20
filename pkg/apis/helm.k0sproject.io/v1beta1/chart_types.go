@@ -13,9 +13,12 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package v1beta1
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"github.com/sirupsen/logrus"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/yaml"
@@ -42,6 +45,13 @@ func (cs ChartSpec) YamlValues() map[string]interface{} {
 	return CleanUpGenericMap(res)
 }
 
+// HashValues returns hash of the values
+func (cs ChartSpec) HashValues() string {
+	h := sha256.New()
+	h.Write([]byte(cs.ReleaseName + cs.Values))
+	return fmt.Sprintf("%x", h.Sum(nil))
+}
+
 // ChartStatus defines the observed state of Chart
 type ChartStatus struct {
 	ReleaseName string `json:"releaseName,omitempty"`
@@ -51,6 +61,7 @@ type ChartStatus struct {
 	Updated     string `json:"updated,omitempty"`
 	Namespace   string `json:"namespace,omitempty"`
 	Revision    int64  `json:"revision,omitempty"`
+	ValuesHash  string `json:"valuesHash,omitempty"`
 	Error       string `json:"error,omitempty"`
 }
 

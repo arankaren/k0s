@@ -15,7 +15,6 @@
 package updater
 
 import (
-	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -49,11 +48,11 @@ func (s *plansSingleControllerSuite) SetupTest() {
 	client, err := s.ExtensionsClient(s.ControllerNode(0))
 	s.Require().NoError(err)
 
-	_, perr := apcomm.WaitForCRDByName(context.TODO(), client, "plans.autopilot.k0sproject.io", 2*time.Minute)
+	_, perr := apcomm.WaitForCRDByName(s.Context(), client, "plans.autopilot.k0sproject.io", 2*time.Minute)
 	s.Require().NoError(perr)
-	_, cerr := apcomm.WaitForCRDByName(context.TODO(), client, "controlnodes.autopilot.k0sproject.io", 2*time.Minute)
+	_, cerr := apcomm.WaitForCRDByName(s.Context(), client, "controlnodes.autopilot.k0sproject.io", 2*time.Minute)
 	s.Require().NoError(cerr)
-	_, uerr := apcomm.WaitForCRDByName(context.TODO(), client, "updateconfigs.autopilot.k0sproject.io", 2*time.Minute)
+	_, uerr := apcomm.WaitForCRDByName(s.Context(), client, "updateconfigs.autopilot.k0sproject.io", 2*time.Minute)
 	s.Require().NoError(uerr)
 }
 
@@ -71,15 +70,9 @@ spec:
   upgradeStrategy:
     cron: "* * * * * *"
   planSpec:
-    id: id123
-    timestamp: now
     commands:
     - k0supdate:
-        version: v0.0.0
         forceupdate: true
-        platforms:
-          linux-amd64:
-            url: http://localhost/dist/k0s
         targets:
           controllers:
             discovery:
@@ -100,19 +93,15 @@ spec:
 	s.Require().NoError(err)
 
 	client, err := s.AutopilotClient(s.ControllerNode(0))
-	s.NoError(err)
+	s.Require().NoError(err)
 	s.NotEmpty(client)
 
 	// The plan has enough information to perform a successful update of k0s, so wait for it.
-	plan, err := apcomm.WaitForPlanByName(context.TODO(), client, apconst.AutopilotName, 10*time.Minute, func(obj interface{}) bool {
-		if plan, ok := obj.(*apv1beta2.Plan); ok {
-			return plan.Status.State == appc.PlanCompleted
-		}
-
-		return false
+	plan, err := apcomm.WaitForPlanByName(s.Context(), client, apconst.AutopilotName, 10*time.Minute, func(plan *apv1beta2.Plan) bool {
+		return plan.Status.State == appc.PlanCompleted
 	})
 
-	s.NoError(err)
+	s.Require().NoError(err)
 	s.Equal(appc.PlanCompleted, plan.Status.State)
 }
 

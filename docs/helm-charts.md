@@ -15,22 +15,22 @@ Adding Helm charts into the k0s configuration file gives you a declarative way i
 
 Each chart is proccesed the same way CLI tool does with following options:
 
-- --wait
-- --wait-for-jobs
-- --timeout 10m
+- `--wait`
+- `--wait-for-jobs`
+- `--timeout 10m`
 
 It is possible to customize timeout by using `.Timeout` field.
 
 ### Chart configuration
 
-| Field | Default value | Description |
-
-| name | - | Release name |
-| chartname | - | chartname in form "repository/chartname"|
-| version | - | version to install |
-| timeout | 10m | timeout to wait for release install |
-| values | - | yaml as a string, custom chart values |
-| namespace | - | namespace to install chart into |
+| Field     | Default value | Description                              |
+|-----------|---------------|------------------------------------------|
+| name      | -             | Release name                             |
+| chartname | -             | chartname in form "repository/chartname" |
+| version   | -             | version to install                       |
+| timeout   | 10m           | timeout to wait for release install      |
+| values    | -             | yaml as a string, custom chart values    |
+| namespace | -             | namespace to install chart into          |
 
 ## Example
 
@@ -58,6 +58,12 @@ spec:
             persistentVolume:
               enabled: false
         namespace: default
+      # We don't need to specify the repo in the repositories section for OCI charts
+      - name: oci-chart
+        chartname: oci://registry:8080/chart
+        version: "0.0.1"
+        values: ""
+        namespace: default
 ```
 
 Example extensions that you can use with Helm charts include:
@@ -65,3 +71,7 @@ Example extensions that you can use with Helm charts include:
 - Ingress controllers: [Nginx ingress](https://github.com/helm/charts/tree/master/stable/nginx-ingress), [Traefix ingress](https://github.com/traefik/traefik-helm-chart) (refer to the k0s documentation for [Installing the Traefik Ingress Controller](examples/traefik-ingress.md))
 - Volume storage providers: [OpenEBS](https://openebs.github.io/charts/), [Rook](https://github.com/rook/rook/blob/master/Documentation/helm-operator.md), [Longhorn](https://longhorn.io/docs/0.8.1/deploy/install/install-with-helm/)
 - Monitoring: [Prometheus](https://github.com/prometheus-community/helm-charts/), [Grafana](https://github.com/grafana/helm-charts)
+
+## Helm debug logging
+
+Running k0s controller with `--debug=true` enables helm debug logging.

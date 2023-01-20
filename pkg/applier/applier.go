@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package applier
 
 import (
@@ -23,7 +24,8 @@ import (
 	"path"
 	"path/filepath"
 
-	"github.com/sirupsen/logrus"
+	"github.com/k0sproject/k0s/pkg/kubernetes"
+
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/cli-runtime/pkg/resource"
@@ -32,7 +34,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/restmapper"
 
-	"github.com/k0sproject/k0s/pkg/kubernetes"
+	"github.com/sirupsen/logrus"
 )
 
 // manifestFilePattern is the glob pattern that all applicable manifest files need to match.
@@ -104,10 +106,12 @@ func (a *Applier) Apply(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+
 	files, err := filepath.Glob(path.Join(a.Dir, manifestFilePattern))
 	if err != nil {
 		return err
 	}
+
 	resources, err := a.parseFiles(files)
 	if err != nil {
 		return err
@@ -138,7 +142,6 @@ func (a *Applier) Delete(ctx context.Context) error {
 	}
 	stack := Stack{
 		Name:      a.Name,
-		Resources: []*unstructured.Unstructured{},
 		Client:    a.client,
 		Discovery: a.discoveryClient,
 	}

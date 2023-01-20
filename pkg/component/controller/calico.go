@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package controller
 
 import (
@@ -20,11 +21,12 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 
 	"github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
-	"github.com/k0sproject/k0s/pkg/component"
+	"github.com/k0sproject/k0s/pkg/component/manager"
 	"github.com/k0sproject/k0s/pkg/constant"
 
 	"github.com/k0sproject/k0s/static"
@@ -35,8 +37,8 @@ import (
 )
 
 // Dummy checks so we catch easily if we miss some interface implementation
-var _ component.Component = (*Calico)(nil)
-var _ component.ReconcilerComponent = (*Calico)(nil)
+var _ manager.Component = (*Calico)(nil)
+var _ manager.Reconciler = (*Calico)(nil)
 
 var calicoCRDOnce sync.Once
 
@@ -65,6 +67,7 @@ type calicoConfig struct {
 	WithWindowsNodes     bool
 	FlexVolumeDriverPath string
 	DualStack            bool
+	EnvVars              map[string]string
 
 	CalicoCNIImage             string
 	CalicoNodeImage            string
@@ -93,7 +96,7 @@ func (c *Calico) Init(_ context.Context) error {
 }
 
 // Run nothing really running, all logic based on reactive reconcile
-func (c *Calico) Run(_ context.Context) error {
+func (c *Calico) Start(_ context.Context) error {
 	return nil
 }
 
@@ -187,6 +190,7 @@ func (c *Calico) getConfig(clusterConfig *v1beta1.ClusterConfig) (calicoConfig, 
 		VxlanPort:                  clusterConfig.Spec.Network.Calico.VxlanPort,
 		VxlanVNI:                   clusterConfig.Spec.Network.Calico.VxlanVNI,
 		EnableWireguard:            clusterConfig.Spec.Network.Calico.EnableWireguard,
+		EnvVars:                    clusterConfig.Spec.Network.Calico.EnvVars,
 		FlexVolumeDriverPath:       clusterConfig.Spec.Network.Calico.FlexVolumeDriverPath,
 		DualStack:                  clusterConfig.Spec.Network.DualStack.Enabled,
 		ClusterCIDRIPv4:            clusterConfig.Spec.Network.PodCIDR,
@@ -230,7 +234,7 @@ func (c *Calico) Reconcile(_ context.Context, cfg *v1beta1.ClusterConfig) error 
 	if err != nil {
 		return err
 	}
-	if newConfig != c.prevConfig {
+	if !reflect.DeepEqual(newConfig, c.prevConfig) {
 		if err := c.processConfigChanges(newConfig); err != nil {
 			c.log.Warnf("failed to process config changes: %v", err)
 		}
@@ -238,6 +242,3 @@ func (c *Calico) Reconcile(_ context.Context, cfg *v1beta1.ClusterConfig) error 
 	}
 	return nil
 }
-
-// Health-check interface
-func (c *Calico) Healthy() error { return nil }

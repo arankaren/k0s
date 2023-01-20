@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package kubeconfig
 
 import (
@@ -22,12 +23,13 @@ import (
 	"path"
 	"testing"
 
-	"github.com/stretchr/testify/suite"
-	"k8s.io/client-go/tools/clientcmd"
-
 	"github.com/k0sproject/k0s/internal/testutil"
 	"github.com/k0sproject/k0s/pkg/certificate"
 	"github.com/k0sproject/k0s/pkg/constant"
+
+	"k8s.io/client-go/tools/clientcmd"
+
+	"github.com/stretchr/testify/suite"
 )
 
 // Define the suite, and absorb the built-in basic suite
@@ -109,7 +111,7 @@ yJm2KSue0toWmkBFK8WMTjAvmAw3Z/qUhJRKoqCu3k6Mf8DNl6t+Uw==
 	userReq := certificate.Request{
 		Name:   "test-user",
 		CN:     "test-user",
-		O:      groups,
+		O:      "groups",
 		CACert: caCertPath,
 		CAKey:  caKeyPath,
 	}
@@ -122,7 +124,7 @@ yJm2KSue0toWmkBFK8WMTjAvmAw3Z/qUhJRKoqCu3k6Mf8DNl6t+Uw==
 	s.Require().NoError(os.MkdirAll(k0sVars.CertRootDir, 0755))
 
 	userCert, err := certManager.EnsureCertificate(userReq, "root")
-	s.NoError(err)
+	s.Require().NoError(err)
 	clusterAPIURL := cfg.Spec.API.APIAddressURL()
 
 	data := struct {

@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package token
 
 import (
@@ -43,10 +44,17 @@ func (t Token) ToArray() []string {
 // NewManager creates a new token manager using given kubeconfig
 func NewManager(kubeconfig string) (*Manager, error) {
 	logrus.Debugf("loading kubeconfig from: %s", kubeconfig)
-	client, err := k8sutil.NewClient(kubeconfig)
+	client, err := k8sutil.NewClientFromFile(kubeconfig)
 	if err != nil {
 		return nil, err
 	}
+	return &Manager{
+		client: client,
+	}, nil
+}
+
+// NewManagerForClient creates a new token manager using given client
+func NewManagerForClient(client kubernetes.Interface) (*Manager, error) {
 	return &Manager{
 		client: client,
 	}, nil

@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package controller
 
 import (
@@ -33,8 +34,8 @@ import (
 	clientset "k8s.io/client-go/kubernetes"
 
 	"github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
-	"github.com/k0sproject/k0s/pkg/component"
-	k8sutil "github.com/k0sproject/k0s/pkg/kubernetes"
+	"github.com/k0sproject/k0s/pkg/component/controller/leaderelector"
+	"github.com/k0sproject/k0s/pkg/component/manager"
 	kubeutil "github.com/k0sproject/k0s/pkg/kubernetes"
 )
 
@@ -56,14 +57,14 @@ type CSRApprover struct {
 
 	ClusterConfig     *v1beta1.ClusterConfig
 	KubeClientFactory kubeutil.ClientFactoryInterface
-	leaderElector     LeaderElector
+	leaderElector     leaderelector.Interface
 	clientset         clientset.Interface
 }
 
-var _ component.Component = (*CSRApprover)(nil)
+var _ manager.Component = (*CSRApprover)(nil)
 
 // NewCSRApprover creates the CSRApprover component
-func NewCSRApprover(c *v1beta1.ClusterConfig, leaderElector LeaderElector, kubeClientFactory k8sutil.ClientFactoryInterface) *CSRApprover {
+func NewCSRApprover(c *v1beta1.ClusterConfig, leaderElector leaderelector.Interface, kubeClientFactory kubeutil.ClientFactoryInterface) *CSRApprover {
 	d := atomic.Value{}
 	d.Store(true)
 	return &CSRApprover{
@@ -73,8 +74,6 @@ func NewCSRApprover(c *v1beta1.ClusterConfig, leaderElector LeaderElector, kubeC
 		L:                 logrus.WithFields(logrus.Fields{"component": "csrapprover"}),
 	}
 }
-
-func (a *CSRApprover) Healthy() error { return nil }
 
 // Stop stops the CSRApprover
 func (a *CSRApprover) Stop() error {
@@ -94,7 +93,7 @@ func (a *CSRApprover) Init(_ context.Context) error {
 }
 
 // Run every 10 seconds checks for newly issued CSRs and approves them
-func (a *CSRApprover) Run(ctx context.Context) error {
+func (a *CSRApprover) Start(ctx context.Context) error {
 	ctx, a.stop = context.WithCancel(ctx)
 	go func() {
 		defer a.stop()

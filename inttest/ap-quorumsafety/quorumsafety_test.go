@@ -15,7 +15,6 @@
 package quorumsafety
 
 import (
-	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -51,7 +50,7 @@ func (s *quorumSafetySuite) SetupSuite() {
 // TearDownSuite tears down the network created after footloose has finished.
 func (s *quorumSafetySuite) TearDownSuite() {
 	s.FootlooseSuite.TearDownSuite()
-	s.Require().NoError(s.DestroyNetwork(network))
+	s.Require().NoError(s.MaybeDestroyNetwork(network))
 }
 
 // SetupTest prepares the controller and filesystem, getting it into a consistent
@@ -72,9 +71,9 @@ func (s *quorumSafetySuite) SetupTest() {
 		client, err := s.ExtensionsClient(s.ControllerNode(0))
 		s.Require().NoError(err)
 
-		_, perr := apcomm.WaitForCRDByName(context.TODO(), client, "plans.autopilot.k0sproject.io", 2*time.Minute)
+		_, perr := apcomm.WaitForCRDByName(s.Context(), client, "plans.autopilot.k0sproject.io", 2*time.Minute)
 		s.Require().NoError(perr)
-		_, cerr := apcomm.WaitForCRDByName(context.TODO(), client, "controlnodes.autopilot.k0sproject.io", 2*time.Minute)
+		_, cerr := apcomm.WaitForCRDByName(s.Context(), client, "controlnodes.autopilot.k0sproject.io", 2*time.Minute)
 		s.Require().NoError(cerr)
 
 		// With the primary controller running, create the join token for subsequent controllers.
@@ -149,20 +148,16 @@ spec:
 	s.Require().NoError(err)
 
 	client, err := s.AutopilotClient(s.ControllerNode(0))
-	s.NoError(err)
+	s.Require().NoError(err)
 	s.NotEmpty(client)
 
 	// The plan should fail with "InconsistentTargets" due to autopilot detecting that `controller2`
 	// despite existing as a `ControlNode`, does not resolve.
-	plan, err := apcomm.WaitForPlanByName(context.TODO(), client, apconst.AutopilotName, 10*time.Minute, func(obj interface{}) bool {
-		if plan, ok := obj.(*apv1beta2.Plan); ok {
-			return plan.Status.State == appc.PlanInconsistentTargets
-		}
-
-		return false
+	plan, err := apcomm.WaitForPlanByName(s.Context(), client, apconst.AutopilotName, 10*time.Minute, func(plan *apv1beta2.Plan) bool {
+		return plan.Status.State == appc.PlanInconsistentTargets
 	})
 
-	s.NoError(err)
+	s.Require().NoError(err)
 	s.Equal(appc.PlanInconsistentTargets, plan.Status.State)
 }
 

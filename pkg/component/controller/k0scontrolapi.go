@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package controller
 
 import (
@@ -20,7 +21,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/k0sproject/k0s/pkg/component"
+	"github.com/k0sproject/k0s/pkg/component/manager"
 	"github.com/k0sproject/k0s/pkg/constant"
 	"github.com/k0sproject/k0s/pkg/supervisor"
 )
@@ -32,7 +33,7 @@ type K0SControlAPI struct {
 	supervisor supervisor.Supervisor
 }
 
-var _ component.Component = (*K0SControlAPI)(nil)
+var _ manager.Component = (*K0SControlAPI)(nil)
 
 // Init does currently nothing
 func (m *K0SControlAPI) Init(_ context.Context) error {
@@ -41,7 +42,7 @@ func (m *K0SControlAPI) Init(_ context.Context) error {
 }
 
 // Run runs k0s control api as separate process
-func (m *K0SControlAPI) Run(_ context.Context) error {
+func (m *K0SControlAPI) Start(_ context.Context) error {
 	// TODO: Make the api process to use some other user
 
 	selfExe, err := os.Executable()
@@ -66,6 +67,3 @@ func (m *K0SControlAPI) Run(_ context.Context) error {
 func (m *K0SControlAPI) Stop() error {
 	return m.supervisor.Stop()
 }
-
-// Healthy for health-check interface
-func (m *K0SControlAPI) Healthy() error { return nil }

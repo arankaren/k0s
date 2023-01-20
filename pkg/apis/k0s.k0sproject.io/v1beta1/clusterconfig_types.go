@@ -13,17 +13,20 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package v1beta1
 
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"reflect"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/k0sproject/k0s/internal/pkg/strictyaml"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
 const (
@@ -41,7 +44,6 @@ type ClusterSpec struct {
 	Scheduler         *SchedulerSpec         `json:"scheduler,omitempty"`
 	Storage           *StorageSpec           `json:"storage"`
 	Network           *Network               `json:"network"`
-	PodSecurityPolicy *PodSecurityPolicy     `json:"podSecurityPolicy"`
 	WorkerProfiles    WorkerProfiles         `json:"workerProfiles,omitempty"`
 	Telemetry         *ClusterTelemetry      `json:"telemetry"`
 	Install           *InstallSpec           `json:"installConfig,omitempty"`
@@ -85,13 +87,10 @@ func (c *ClusterConfig) StripDefaults() *ClusterConfig {
 		copy.Spec.Scheduler = nil
 	}
 	if reflect.DeepEqual(c.Spec.Storage, DefaultStorageSpec()) {
-		c.Spec.ControllerManager = nil
+		c.Spec.Storage = nil
 	}
 	if reflect.DeepEqual(copy.Spec.Network, DefaultNetwork()) {
 		copy.Spec.Network = nil
-	}
-	if reflect.DeepEqual(copy.Spec.PodSecurityPolicy, DefaultPodSecurityPolicy()) {
-		copy.Spec.PodSecurityPolicy = nil
 	}
 	if reflect.DeepEqual(copy.Spec.Telemetry, DefaultClusterTelemetry()) {
 		copy.Spec.Telemetry = nil
@@ -110,17 +109,25 @@ type InstallSpec struct {
 	SystemUsers *SystemUser `json:"users,omitempty"`
 }
 
+var _ Validateable = (*InstallSpec)(nil)
+
+func (*InstallSpec) Validate() []error { return nil }
+
 // ControllerManagerSpec defines the fields for the ControllerManager
 type ControllerManagerSpec struct {
 	// Map of key-values (strings) for any extra arguments you want to pass down to the Kubernetes controller manager process
 	ExtraArgs map[string]string `json:"extraArgs,omitempty"`
 }
 
+var _ Validateable = (*ControllerManagerSpec)(nil)
+
 func DefaultControllerManagerSpec() *ControllerManagerSpec {
 	return &ControllerManagerSpec{
 		ExtraArgs: make(map[string]string),
 	}
 }
+
+func (c *ControllerManagerSpec) Validate() []error { return nil }
 
 // SchedulerSpec defines the fields for the Scheduler
 type SchedulerSpec struct {
@@ -134,7 +141,11 @@ func DefaultSchedulerSpec() *SchedulerSpec {
 	}
 }
 
-//+kubebuilder:object:root=true
+var _ Validateable = (*SchedulerSpec)(nil)
+
+func (*SchedulerSpec) Validate() []error { return nil }
+
+// +kubebuilder:object:root=true
 // +genclient
 // +genclient:onlyVerbs=create
 // ClusterConfigList contains a list of ClusterConfig
@@ -162,7 +173,7 @@ func (s *SchedulerSpec) IsZero() bool {
 
 func ConfigFromString(yml string, defaultStorage ...*StorageSpec) (*ClusterConfig, error) {
 	config := DefaultClusterConfig(defaultStorage...)
-	err := strictyaml.YamlUnmarshalStrictIgnoringFields([]byte(yml), config, "interval")
+	err := strictyaml.YamlUnmarshalStrictIgnoringFields([]byte(yml), config, "interval", "podSecurityPolicy")
 	if err != nil {
 		return config, err
 	}
@@ -214,7 +225,49 @@ func (c *ClusterConfig) UnmarshalJSON(data []byte) error {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 
-	return decoder.Decode(jc)
+	err := decoder.Decode(jc)
+	if err != nil {
+		return err
+	}
+
+	if jc.Spec == nil {
+		jc.Spec = DefaultClusterSpec(storage)
+		return nil
+	}
+	if jc.Spec.Storage == nil {
+		jc.Spec.Storage = DefaultStorageSpec()
+	}
+	if jc.Spec.Extensions == nil {
+		jc.Spec.Extensions = DefaultExtensions()
+	}
+	if jc.Spec.Network == nil {
+		jc.Spec.Network = DefaultNetwork()
+	}
+	if jc.Spec.API == nil {
+		jc.Spec.API = DefaultAPISpec()
+	}
+	if jc.Spec.ControllerManager == nil {
+		jc.Spec.ControllerManager = DefaultControllerManagerSpec()
+	}
+	if jc.Spec.Scheduler == nil {
+		jc.Spec.Scheduler = DefaultSchedulerSpec()
+	}
+	if jc.Spec.Install == nil {
+		jc.Spec.Install = DefaultInstallSpec()
+	}
+	if jc.Spec.Images == nil {
+		jc.Spec.Images = DefaultClusterImages()
+	}
+	if jc.Spec.Telemetry == nil {
+		jc.Spec.Telemetry = DefaultClusterTelemetry()
+	}
+	if jc.Spec.Konnectivity == nil {
+		jc.Spec.Konnectivity = DefaultKonnectivitySpec()
+	}
+
+	jc.Spec.overrideImageRepositories()
+
+	return nil
 }
 
 // DefaultClusterSpec default settings
@@ -226,36 +279,22 @@ func DefaultClusterSpec(defaultStorage ...*StorageSpec) *ClusterSpec {
 		storage = defaultStorage[0]
 	}
 
-	return &ClusterSpec{
+	spec := &ClusterSpec{
 		Extensions:        DefaultExtensions(),
 		Storage:           storage,
 		Network:           DefaultNetwork(),
 		API:               DefaultAPISpec(),
 		ControllerManager: DefaultControllerManagerSpec(),
 		Scheduler:         DefaultSchedulerSpec(),
-		PodSecurityPolicy: DefaultPodSecurityPolicy(),
 		Install:           DefaultInstallSpec(),
 		Images:            DefaultClusterImages(),
 		Telemetry:         DefaultClusterTelemetry(),
 		Konnectivity:      DefaultKonnectivitySpec(),
 	}
-}
 
-func (c *ControllerManagerSpec) Validate() []error {
-	return nil
-}
+	spec.overrideImageRepositories()
 
-var _ Validateable = (*SchedulerSpec)(nil)
-
-func (s *SchedulerSpec) Validate() []error {
-	return nil
-}
-
-var _ Validateable = (*InstallSpec)(nil)
-
-// Validate stub for Validateable interface
-func (i *InstallSpec) Validate() []error {
-	return nil
+	return spec
 }
 
 // Validateable interface to ensure that all config components implement Validate function
@@ -264,23 +303,86 @@ type Validateable interface {
 	Validate() []error
 }
 
+func (s *ClusterSpec) Validate() (errs []error) {
+	if s == nil {
+		return
+	}
+
+	for name, field := range map[string]Validateable{
+		"api":               s.API,
+		"controllerManager": s.ControllerManager,
+		"scheduler":         s.Scheduler,
+		"storage":           s.Storage,
+		"network":           s.Network,
+		"workerProfiles":    s.WorkerProfiles,
+		"telemetry":         s.Telemetry,
+		"install":           s.Install,
+		"extensions":        s.Extensions,
+		"konnectivity":      s.Konnectivity,
+	} {
+		for _, err := range field.Validate() {
+			errs = append(errs, fmt.Errorf("%s: %w", name, err))
+		}
+	}
+
+	for _, err := range s.Images.Validate(field.NewPath("images")) {
+		errs = append(errs, err)
+	}
+
+	for _, err := range s.ValidateNodeLocalLoadBalancing() {
+		errs = append(errs, err)
+	}
+
+	return
+}
+
+func (s *ClusterSpec) ValidateNodeLocalLoadBalancing() (errs field.ErrorList) {
+	if s.Network == nil || !s.Network.NodeLocalLoadBalancing.IsEnabled() {
+		return
+	}
+
+	if s.API == nil {
+		return
+	}
+
+	path := field.NewPath("network", "nodeLocalLoadBalancing", "enabled")
+	if s.API.TunneledNetworkingMode {
+		detail := "node-local load balancing cannot be used in tunneled networking mode"
+		errs = append(errs, field.Forbidden(path, detail))
+	}
+
+	if s.API.ExternalAddress != "" {
+		detail := "node-local load balancing cannot be used in conjunction with an external Kubernetes API server address"
+		errs = append(errs, field.Forbidden(path, detail))
+	}
+
+	return
+}
+
+func (s *ClusterSpec) overrideImageRepositories() {
+	if s != nil &&
+		s.Images != nil &&
+		s.Images.Repository != "" &&
+		s.Network != nil &&
+		s.Network.NodeLocalLoadBalancing != nil &&
+		s.Network.NodeLocalLoadBalancing.EnvoyProxy != nil &&
+		s.Network.NodeLocalLoadBalancing.EnvoyProxy.Image != nil {
+		i := s.Network.NodeLocalLoadBalancing.EnvoyProxy.Image
+		i.Image = overrideRepository(s.Images.Repository, i.Image)
+	}
+}
+
 // Validate validates cluster config
-func (c *ClusterConfig) Validate() []error {
-	var errors []error
+func (c *ClusterConfig) Validate() (errs []error) {
+	if c == nil {
+		return nil
+	}
 
-	errors = append(errors, validateSpecs(c.Spec.API)...)
-	errors = append(errors, validateSpecs(c.Spec.ControllerManager)...)
-	errors = append(errors, validateSpecs(c.Spec.Scheduler)...)
-	errors = append(errors, validateSpecs(c.Spec.Storage)...)
-	errors = append(errors, validateSpecs(c.Spec.Network)...)
-	errors = append(errors, validateSpecs(c.Spec.PodSecurityPolicy)...)
-	errors = append(errors, validateSpecs(c.Spec.WorkerProfiles)...)
-	errors = append(errors, validateSpecs(c.Spec.Telemetry)...)
-	errors = append(errors, validateSpecs(c.Spec.Install)...)
-	errors = append(errors, validateSpecs(c.Spec.Extensions)...)
-	errors = append(errors, validateSpecs(c.Spec.Konnectivity)...)
+	for _, err := range c.Spec.Validate() {
+		errs = append(errs, fmt.Errorf("spec: %w", err))
+	}
 
-	return errors
+	return errs
 }
 
 // GetBootstrappingConfig returns a ClusterConfig object stripped of Cluster-Wide Settings
@@ -290,6 +392,7 @@ func (c *ClusterConfig) GetBootstrappingConfig(storageSpec *StorageSpec) *Cluste
 		etcdConfig = &EtcdConfig{
 			ExternalCluster: storageSpec.Etcd.ExternalCluster,
 			PeerAddress:     storageSpec.Etcd.PeerAddress,
+			ExtraArgs:       storageSpec.Etcd.ExtraArgs,
 		}
 		c.Spec.Storage.Etcd = etcdConfig
 	}
@@ -300,8 +403,9 @@ func (c *ClusterConfig) GetBootstrappingConfig(storageSpec *StorageSpec) *Cluste
 			API:     c.Spec.API,
 			Storage: storageSpec,
 			Network: &Network{
-				ServiceCIDR: c.Spec.Network.ServiceCIDR,
-				DualStack:   c.Spec.Network.DualStack,
+				ServiceCIDR:   c.Spec.Network.ServiceCIDR,
+				DualStack:     c.Spec.Network.DualStack,
+				ClusterDomain: c.Spec.Network.ClusterDomain,
 			},
 			Install: c.Spec.Install,
 		},
@@ -315,30 +419,21 @@ func (c *ClusterConfig) GetBootstrappingConfig(storageSpec *StorageSpec) *Cluste
 // - APISpec
 // - StorageSpec
 // - Network.ServiceCIDR
+// - Network.ClusterDomain
 // - Install
 func (c *ClusterConfig) GetClusterWideConfig() *ClusterConfig {
-	return &ClusterConfig{
-		ObjectMeta: c.ObjectMeta,
-		TypeMeta:   c.TypeMeta,
-		Spec: &ClusterSpec{
-			ControllerManager: c.Spec.ControllerManager,
-			Scheduler:         c.Spec.Scheduler,
-			Network: &Network{
-				Calico:     c.Spec.Network.Calico,
-				KubeProxy:  c.Spec.Network.KubeProxy,
-				KubeRouter: c.Spec.Network.KubeRouter,
-				PodCIDR:    c.Spec.Network.PodCIDR,
-				Provider:   c.Spec.Network.Provider,
-			},
-			PodSecurityPolicy: c.Spec.PodSecurityPolicy,
-			WorkerProfiles:    c.Spec.WorkerProfiles,
-			Telemetry:         c.Spec.Telemetry,
-			Images:            c.Spec.Images,
-			Extensions:        c.Spec.Extensions,
-			Konnectivity:      c.Spec.Konnectivity,
-		},
-		Status: c.Status,
+	c = c.DeepCopy()
+	if c != nil && c.Spec != nil {
+		c.Spec.API = nil
+		c.Spec.Storage = nil
+		if c.Spec.Network != nil {
+			c.Spec.Network.ServiceCIDR = ""
+			c.Spec.Network.ClusterDomain = ""
+		}
+		c.Spec.Install = nil
 	}
+
+	return c
 }
 
 // CRValidator is used to make sure a config CR is created with correct values
@@ -348,9 +443,4 @@ func (c *ClusterConfig) CRValidator() *ClusterConfig {
 	copy.ObjectMeta.Namespace = "kube-system"
 
 	return copy
-}
-
-// validateSpecs invokes validator Validate function
-func validateSpecs(v Validateable) []error {
-	return v.Validate()
 }

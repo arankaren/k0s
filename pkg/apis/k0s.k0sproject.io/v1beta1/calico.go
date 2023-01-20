@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package v1beta1
 
 import "encoding/json"
@@ -21,6 +22,9 @@ import "encoding/json"
 type Calico struct {
 	// Enable wireguard-based encryption (default: false)
 	EnableWireguard bool `json:"wireguard"`
+
+	// Environment variables to configure Calico node (see https://docs.projectcalico.org/reference/node/configuration)
+	EnvVars map[string]string `json:"envVars,omitempty"`
 
 	// The host path for Calicos flex-volume-driver(default: /usr/libexec/k0s/kubelet-plugins/volume/exec/nodeagent~uds)
 	FlexVolumeDriverPath string `json:"flexVolumeDriverPath"`

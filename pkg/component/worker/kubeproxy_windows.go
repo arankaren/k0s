@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package worker
 
 import (
@@ -21,7 +22,7 @@ import (
 	"strings"
 
 	"github.com/k0sproject/k0s/pkg/assets"
-	"github.com/k0sproject/k0s/pkg/component"
+	"github.com/k0sproject/k0s/pkg/component/manager"
 	"github.com/k0sproject/k0s/pkg/constant"
 	"github.com/k0sproject/k0s/pkg/supervisor"
 )
@@ -33,19 +34,19 @@ type KubeProxy struct {
 	supervisor supervisor.Supervisor
 }
 
-var _ component.Component = (*KubeProxy)(nil)
+var _ manager.Component = (*KubeProxy)(nil)
 
 // Init
 func (k KubeProxy) Init(_ context.Context) error {
 	return assets.Stage(k.K0sVars.BinDir, "kube-proxy.exe", constant.BinDirMode)
 }
 
-func (k KubeProxy) Run(ctx context.Context) error {
+func (k KubeProxy) Start(ctx context.Context) error {
 	node, err := getNodeName(ctx)
 	if err != nil {
 		return fmt.Errorf("can't get hostname: %v", err)
 	}
-	fmt.Println(31)
+
 	sourceVip, err := getSourceVip()
 	if err != nil {
 		return fmt.Errorf("can't get source vip: %v", err)
@@ -75,8 +76,4 @@ func (k KubeProxy) Run(ctx context.Context) error {
 
 func (k KubeProxy) Stop() error {
 	return k.supervisor.Stop()
-}
-
-func (k KubeProxy) Healthy() error {
-	return nil
 }

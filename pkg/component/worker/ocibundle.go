@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package worker
 
 import (
@@ -24,8 +25,9 @@ import (
 
 	"github.com/avast/retry-go"
 	"github.com/containerd/containerd"
+	"github.com/containerd/containerd/platforms"
 	"github.com/k0sproject/k0s/internal/pkg/dir"
-	"github.com/k0sproject/k0s/pkg/component"
+	"github.com/k0sproject/k0s/pkg/component/manager"
 	"github.com/k0sproject/k0s/pkg/constant"
 	"github.com/sirupsen/logrus"
 )
@@ -36,7 +38,7 @@ type OCIBundleReconciler struct {
 	log     *logrus.Entry
 }
 
-var _ component.Component = (*OCIBundleReconciler)(nil)
+var _ manager.Component = (*OCIBundleReconciler)(nil)
 
 // NewOCIBundleReconciler builds new reconciler
 func NewOCIBundleReconciler(vars constant.CfgVars) *OCIBundleReconciler {
@@ -50,7 +52,7 @@ func (a *OCIBundleReconciler) Init(_ context.Context) error {
 	return dir.Init(a.k0sVars.OCIBundleDir, constant.ManifestsDirMode)
 }
 
-func (a *OCIBundleReconciler) Run(ctx context.Context) error {
+func (a *OCIBundleReconciler) Start(ctx context.Context) error {
 	files, err := os.ReadDir(a.k0sVars.OCIBundleDir)
 	if err != nil {
 		return fmt.Errorf("can't read bundles directory")
@@ -61,7 +63,7 @@ func (a *OCIBundleReconciler) Run(ctx context.Context) error {
 	var client *containerd.Client
 	sock := filepath.Join(a.k0sVars.RunDir, "containerd.sock")
 	err = retry.Do(func() error {
-		client, err = containerd.New(sock, containerd.WithDefaultNamespace("k8s.io"))
+		client, err = containerd.New(sock, containerd.WithDefaultNamespace("k8s.io"), containerd.WithDefaultPlatform(platforms.OnlyStrict(platforms.DefaultSpec())))
 		if err != nil {
 			logrus.WithError(err).Errorf("can't connect to containerd socket %s", sock)
 			return err
@@ -106,5 +108,3 @@ func (a OCIBundleReconciler) unpackBundle(ctx context.Context, client *container
 func (a *OCIBundleReconciler) Stop() error {
 	return nil
 }
-
-func (a *OCIBundleReconciler) Healthy() error { return nil }

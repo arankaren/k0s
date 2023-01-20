@@ -17,14 +17,15 @@ package k0s
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	apcomm "github.com/k0sproject/k0s/pkg/autopilot/common"
 	apconst "github.com/k0sproject/k0s/pkg/autopilot/constant"
 	apdel "github.com/k0sproject/k0s/pkg/autopilot/controller/delegate"
 	apsigpred "github.com/k0sproject/k0s/pkg/autopilot/controller/signal/common/predicate"
 	apsigv2 "github.com/k0sproject/k0s/pkg/autopilot/signaling/v2"
-
-	k0sinstall "github.com/k0sproject/k0s/pkg/install"
+	"github.com/k0sproject/k0s/pkg/component/status"
 
 	"github.com/sirupsen/logrus"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -42,7 +43,7 @@ const (
 
 // RegisterControllers registers all of the autopilot controllers used for updating `k0s`
 // to the controller-runtime manager.
-func RegisterControllers(ctx context.Context, logger *logrus.Entry, mgr crman.Manager, delegate apdel.ControllerDelegate) error {
+func RegisterControllers(ctx context.Context, logger *logrus.Entry, mgr crman.Manager, delegate apdel.ControllerDelegate, clusterID string) error {
 	logger = logger.WithField("controller", delegate.Name())
 
 	hostname, err := apcomm.FindEffectiveHostname()
@@ -50,13 +51,19 @@ func RegisterControllers(ctx context.Context, logger *logrus.Entry, mgr crman.Ma
 		return fmt.Errorf("unable to determine hostname for controlnode 'signal' reconciler: %w", err)
 	}
 
+	k0sBinaryPath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("unable to determine k0s binary path for controlnode 'signal' reconciler: %w", err)
+	}
+	k0sBinaryDir := filepath.Dir(k0sBinaryPath)
+
 	logger.Infof("Using effective hostname = '%v'", hostname)
 
-	if err := registerSignalController(logger, mgr, signalControllerEventFilter(hostname, apsigpred.DefaultErrorHandler(logger, "k0s signal")), delegate); err != nil {
+	if err := registerSignalController(logger, mgr, signalControllerEventFilter(hostname, apsigpred.DefaultErrorHandler(logger, "k0s signal")), delegate, clusterID); err != nil {
 		return fmt.Errorf("unable to register k0s 'signal' controller: %w", err)
 	}
 
-	if err := registerDownloading(logger, mgr, downloadEventFilter(hostname, apsigpred.DefaultErrorHandler(logger, "k0s downloading")), delegate); err != nil {
+	if err := registerDownloading(logger, mgr, downloadEventFilter(hostname, apsigpred.DefaultErrorHandler(logger, "k0s downloading")), delegate, k0sBinaryDir); err != nil {
 		return fmt.Errorf("unable to register k0s 'downloading' controller: %w", err)
 	}
 
@@ -64,7 +71,7 @@ func RegisterControllers(ctx context.Context, logger *logrus.Entry, mgr crman.Ma
 		return fmt.Errorf("unable to register k0s 'cordoning' controller: %w", err)
 	}
 
-	if err := registerApplyingUpdate(logger, mgr, applyingUpdateEventFilter(hostname, apsigpred.DefaultErrorHandler(logger, "k0s applying-update")), delegate); err != nil {
+	if err := registerApplyingUpdate(logger, mgr, applyingUpdateEventFilter(hostname, apsigpred.DefaultErrorHandler(logger, "k0s applying-update")), delegate, k0sBinaryDir); err != nil {
 		return fmt.Errorf("unable to register k0s 'applying-update' controller: %w", err)
 	}
 
@@ -86,7 +93,7 @@ func RegisterControllers(ctx context.Context, logger *logrus.Entry, mgr crman.Ma
 // getK0sVersion returns the version k0s installed, as identified by the
 // provided status socket path.
 func getK0sVersion(statusSocketPath string) (string, error) {
-	status, err := k0sinstall.GetStatusInfo(statusSocketPath)
+	status, err := status.GetStatusInfo(statusSocketPath)
 	if err != nil {
 		return "", err
 	}
@@ -96,7 +103,7 @@ func getK0sVersion(statusSocketPath string) (string, error) {
 
 // getK0sPid returns the PID of a running k0s based on its status socket.
 func getK0sPid(statusSocketPath string) (int, error) {
-	status, err := k0sinstall.GetStatusInfo(statusSocketPath)
+	status, err := status.GetStatusInfo(statusSocketPath)
 	if err != nil {
 		return -1, err
 	}

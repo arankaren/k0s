@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package controller
 
 import (
@@ -26,7 +27,8 @@ import (
 	"github.com/k0sproject/k0s/internal/pkg/templatewriter"
 	"github.com/k0sproject/k0s/pkg/apis/helm.k0sproject.io/v1beta1"
 	k0sAPI "github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
-	"github.com/k0sproject/k0s/pkg/component"
+	"github.com/k0sproject/k0s/pkg/component/controller/leaderelector"
+	"github.com/k0sproject/k0s/pkg/component/manager"
 	"github.com/k0sproject/k0s/pkg/constant"
 	"github.com/k0sproject/k0s/pkg/helm"
 	kubeutil "github.com/k0sproject/k0s/pkg/kubernetes"
@@ -38,9 +40,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"sigs.k8s.io/controller-runtime/pkg/manager"
+	ctrlManager "sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/yaml"
 )
 
 // Helm watch for Chart crd
@@ -49,14 +52,14 @@ type ExtensionsController struct {
 	L             *logrus.Entry
 	helm          *helm.Commands
 	kubeConfig    string
-	leaderElector LeaderElector
+	leaderElector leaderelector.Interface
 }
 
-var _ component.Component = (*ExtensionsController)(nil)
-var _ component.ReconcilerComponent = (*ExtensionsController)(nil)
+var _ manager.Component = (*ExtensionsController)(nil)
+var _ manager.Reconciler = (*ExtensionsController)(nil)
 
 // NewExtensionsController builds new HelmAddons
-func NewExtensionsController(s manifestsSaver, k0sVars constant.CfgVars, kubeClientFactory kubeutil.ClientFactoryInterface, leaderElector LeaderElector) *ExtensionsController {
+func NewExtensionsController(s manifestsSaver, k0sVars constant.CfgVars, kubeClientFactory kubeutil.ClientFactoryInterface, leaderElector leaderelector.Interface) *ExtensionsController {
 	return &ExtensionsController{
 		saver:         s,
 		L:             logrus.WithFields(logrus.Fields{"component": "extensions_controller"}),
@@ -76,9 +79,13 @@ func (ec *ExtensionsController) Reconcile(ctx context.Context, clusterConfig *k0
 	defer ec.L.Info("Extensions reconcilation finished")
 
 	helmSettings := clusterConfig.Spec.Extensions.Helm
+	var err error
 	switch clusterConfig.Spec.Extensions.Storage.Type {
 	case k0sAPI.OpenEBSLocal:
-		helmSettings = addOpenEBSHelmExtension(helmSettings)
+		helmSettings, err = addOpenEBSHelmExtension(helmSettings, clusterConfig.Spec.Extensions.Storage)
+		if err != nil {
+			ec.L.Errorf("can't add openebs helm extension: %v", err)
+		}
 	default:
 	}
 
@@ -89,7 +96,20 @@ func (ec *ExtensionsController) Reconcile(ctx context.Context, clusterConfig *k0
 	return nil
 }
 
-func addOpenEBSHelmExtension(helmSpec *k0sAPI.HelmExtensions) *k0sAPI.HelmExtensions {
+func addOpenEBSHelmExtension(helmSpec *k0sAPI.HelmExtensions, storageExtension *k0sAPI.StorageExtension) (*k0sAPI.HelmExtensions, error) {
+	openEBSValues := map[string]interface{}{
+		"localprovisioner": map[string]interface{}{
+			"hostpathClass": map[string]interface{}{
+				"enabled":        true,
+				"isDefaultClass": storageExtension.CreateDefaultStorageClass,
+			},
+		},
+	}
+	values, err := yamlifyValues(openEBSValues)
+	if err != nil {
+		logrus.Errorf("can't yamlify openebs values: %v", err)
+		return nil, err
+	}
 	if helmSpec == nil {
 		helmSpec = &k0sAPI.HelmExtensions{
 			Repositories: k0sAPI.RepositoriesSettings{},
@@ -105,9 +125,18 @@ func addOpenEBSHelmExtension(helmSpec *k0sAPI.HelmExtensions) *k0sAPI.HelmExtens
 		ChartName: "openebs-internal/openebs",
 		TargetNS:  "openebs",
 		Version:   constant.OpenEBSVersion,
+		Values:    values,
 		Timeout:   time.Duration(time.Minute * 30), // it takes a while to install openebs
 	})
-	return helmSpec
+	return helmSpec, nil
+}
+
+func yamlifyValues(values map[string]interface{}) (string, error) {
+	bytes, err := yaml.Marshal(values)
+	if err != nil {
+		return "", err
+	}
+	return string(bytes), nil
 }
 
 // reconcileHelmExtensions creates instance of Chart CR for each chart of the config file
@@ -151,7 +180,7 @@ func (ec *ExtensionsController) reconcileHelmExtensions(helmSpec *k0sAPI.HelmExt
 type ChartReconciler struct {
 	client.Client
 	helm          *helm.Commands
-	leaderElector LeaderElector
+	leaderElector leaderelector.Interface
 	L             *logrus.Entry
 }
 
@@ -216,7 +245,9 @@ func (cr *ChartReconciler) updateOrInstallChart(ctx context.Context, chart v1bet
 		timeout = defaultTimeout
 	}
 	defer func() {
-		cr.updateStatus(ctx, chart, chartRelease, err)
+		if err != nil {
+			cr.updateStatus(ctx, chart, chartRelease, err)
+		}
 	}()
 	if chart.Status.ReleaseName == "" {
 		// new chartRelease
@@ -232,24 +263,34 @@ func (cr *ChartReconciler) updateOrInstallChart(ctx context.Context, chart v1bet
 			return fmt.Errorf("can't reconcile installation for `%s`: %v", chart.GetName(), err)
 		}
 	} else {
-		// update
-		chartRelease, err = cr.helm.UpgradeChart(chart.Spec.ChartName,
-			chart.Status.Version,
-			chart.Status.ReleaseName,
-			chart.Status.Namespace,
-			chart.Spec.YamlValues(),
-			timeout,
-		)
-		if err != nil {
-			return fmt.Errorf("can't reconcile upgrade for `%s`: %v", chart.GetName(), err)
+		if cr.chartNeedsUpgrade(chart) {
+			// update
+			chartRelease, err = cr.helm.UpgradeChart(chart.Spec.ChartName,
+				chart.Status.Version,
+				chart.Status.ReleaseName,
+				chart.Status.Namespace,
+				chart.Spec.YamlValues(),
+				timeout,
+			)
+			if err != nil {
+				return fmt.Errorf("can't reconcile upgrade for `%s`: %v", chart.GetName(), err)
+			}
 		}
 	}
 	cr.updateStatus(ctx, chart, chartRelease, nil)
 	return nil
 }
 
+func (cr *ChartReconciler) chartNeedsUpgrade(chart v1beta1.Chart) bool {
+	return !(chart.Status.Namespace == chart.Spec.Namespace &&
+		chart.Status.ReleaseName == chart.Spec.ReleaseName &&
+		chart.Status.Version == chart.Spec.Version &&
+		chart.Status.ValuesHash == chart.Spec.HashValues())
+}
+
 func (cr *ChartReconciler) updateStatus(ctx context.Context, chart v1beta1.Chart, chartRelease *release.Release, err error) {
 
+	chart.Spec.YamlValues()
 	if chartRelease != nil {
 		chart.Status.ReleaseName = chartRelease.Name
 		chart.Status.Version = chartRelease.Chart.Metadata.Version
@@ -261,6 +302,7 @@ func (cr *ChartReconciler) updateStatus(ctx context.Context, chart v1beta1.Chart
 	if err != nil {
 		chart.Status.Error = err.Error()
 	}
+	chart.Status.ValuesHash = chart.Spec.HashValues()
 	if updErr := cr.Client.Status().Update(ctx, &chart); updErr != nil {
 		cr.L.Errorf("Failed to update status for chart release %s: %s", chart.Name, updErr)
 	}
@@ -296,13 +338,13 @@ func (ec *ExtensionsController) Init(_ context.Context) error {
 }
 
 // Run
-func (ec *ExtensionsController) Run(ctx context.Context) error {
+func (ec *ExtensionsController) Start(ctx context.Context) error {
 	config, err := clientcmd.BuildConfigFromFlags("", ec.kubeConfig)
 	if err != nil {
 		return fmt.Errorf("can't build controller-runtime controller for helm extensions: %w", err)
 	}
 
-	mgr, err := manager.New(config, manager.Options{
+	mgr, err := ctrlManager.New(config, ctrlManager.Options{
 		MetricsBindAddress: "0",
 		Logger:             logrusr.New(ec.L),
 	})
@@ -359,10 +401,5 @@ func (ec *ExtensionsController) Run(ctx context.Context) error {
 
 // Stop
 func (ec *ExtensionsController) Stop() error {
-	return nil
-}
-
-// Healthy
-func (ec *ExtensionsController) Healthy() error {
 	return nil
 }

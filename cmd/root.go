@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package cmd
 
 import (
@@ -20,14 +21,10 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/sirupsen/logrus"
-	"github.com/spf13/cobra"
-	"github.com/spf13/cobra/doc"
-
 	"github.com/k0sproject/k0s/cmd/airgap"
 	"github.com/k0sproject/k0s/cmd/api"
 	"github.com/k0sproject/k0s/cmd/backup"
-	cfg "github.com/k0sproject/k0s/cmd/config"
+	configcmd "github.com/k0sproject/k0s/cmd/config"
 	"github.com/k0sproject/k0s/cmd/controller"
 	"github.com/k0sproject/k0s/cmd/ctr"
 	"github.com/k0sproject/k0s/cmd/etcd"
@@ -46,29 +43,30 @@ import (
 	"github.com/k0sproject/k0s/cmd/worker"
 	"github.com/k0sproject/k0s/pkg/build"
 	"github.com/k0sproject/k0s/pkg/config"
+
+	"github.com/sirupsen/logrus"
+	"github.com/spf13/cobra"
+	"github.com/spf13/cobra/doc"
 )
 
-var longDesc string
-
-type cliOpts config.CLIOptions
-
 func NewRootCmd() *cobra.Command {
+	var longDesc string
+
 	cmd := &cobra.Command{
 		Use:   "k0s",
 		Short: "k0s - Zero Friction Kubernetes",
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
-			c := cliOpts(config.GetCmdOpts())
-
-			if c.Verbose {
+			if config.Verbose {
 				logrus.SetLevel(logrus.InfoLevel)
 			}
 
-			if c.Debug {
+			if config.Debug {
+				// TODO: check if it actually works and is not overwritten by something else
 				logrus.SetLevel(logrus.DebugLevel)
 				go func() {
-					log := logrus.WithField("debug_server", c.DebugListenOn)
+					log := logrus.WithField("debug_server", config.DebugListenOn)
 					log.Debug("Starting debug server")
-					if err := http.ListenAndServe(c.DebugListenOn, nil); err != http.ErrServerClosed {
+					if err := http.ListenAndServe(config.DebugListenOn, nil); err != http.ErrServerClosed {
 						log.WithError(err).Debug("Failed to start debug server")
 					} else {
 						log.Debug("Debug server closed")
@@ -83,7 +81,7 @@ func NewRootCmd() *cobra.Command {
 	cmd.AddCommand(backup.NewBackupCmd())
 	cmd.AddCommand(controller.NewControllerCmd())
 	cmd.AddCommand(ctr.NewCtrCommand())
-	cmd.AddCommand(cfg.NewConfigCmd())
+	cmd.AddCommand(configcmd.NewConfigCmd())
 	cmd.AddCommand(etcd.NewEtcdCmd())
 	cmd.AddCommand(install.NewInstallCmd())
 	cmd.AddCommand(kubeconfig.NewKubeConfigCmd())
@@ -131,7 +129,7 @@ func newDocsCmd() *cobra.Command {
 }
 
 func newDefaultConfigCmd() *cobra.Command {
-	cmd := cfg.NewCreateCmd()
+	cmd := configcmd.NewCreateCmd()
 	cmd.Hidden = true
 	cmd.Deprecated = "use 'k0s config create' instead"
 	cmd.Use = "default-config"
@@ -174,15 +172,16 @@ $ k0s completion fish > ~/.config/fish/completions/k0s.fish
 		ValidArgs:             []string{"bash", "zsh", "fish", "powershell"},
 		Args:                  cobra.ExactValidArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			out := cmd.OutOrStdout()
 			switch args[0] {
 			case "bash":
-				return cmd.Root().GenBashCompletion(os.Stdout)
+				return cmd.Root().GenBashCompletion(out)
 			case "zsh":
-				return cmd.Root().GenZshCompletion(os.Stdout)
+				return cmd.Root().GenZshCompletion(out)
 			case "fish":
-				return cmd.Root().GenFishCompletion(os.Stdout, true)
+				return cmd.Root().GenFishCompletion(out, true)
 			case "powershell":
-				return cmd.Root().GenPowerShellCompletion(os.Stdout)
+				return cmd.Root().GenPowerShellCompletion(out)
 			}
 			return nil
 		},

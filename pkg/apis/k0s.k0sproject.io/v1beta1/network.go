@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package v1beta1
 
 import (
@@ -20,8 +21,10 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/asaskevich/govalidator"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	utilnet "k8s.io/utils/net"
+
+	"github.com/asaskevich/govalidator"
 )
 
 var _ Validateable = (*Network)(nil)
@@ -32,6 +35,12 @@ type Network struct {
 	DualStack  DualStack   `json:"dualStack,omitempty"`
 	KubeProxy  *KubeProxy  `json:"kubeProxy"`
 	KubeRouter *KubeRouter `json:"kuberouter"`
+
+	// nodeLocalLoadBalancing defines the configuration options related to k0s's
+	// node-local load balancing feature.
+	// NOTE: This feature is experimental, and currently unsupported on ARMv7!
+	// +optional
+	NodeLocalLoadBalancing *NodeLocalLoadBalancing `json:"nodeLocalLoadBalancing,omitempty"`
 
 	// Pod network CIDR to use in the cluster
 	PodCIDR string `json:"podCIDR"`
@@ -46,51 +55,64 @@ type Network struct {
 // DefaultNetwork creates the Network config struct with sane default values
 func DefaultNetwork() *Network {
 	return &Network{
-		PodCIDR:       "10.244.0.0/16",
-		ServiceCIDR:   "10.96.0.0/12",
-		Provider:      "kuberouter",
-		KubeRouter:    DefaultKubeRouter(),
-		DualStack:     DefaultDualStack(),
-		KubeProxy:     DefaultKubeProxy(),
-		ClusterDomain: "cluster.local",
+		PodCIDR:                "10.244.0.0/16",
+		ServiceCIDR:            "10.96.0.0/12",
+		Provider:               "kuberouter",
+		KubeRouter:             DefaultKubeRouter(),
+		DualStack:              DefaultDualStack(),
+		KubeProxy:              DefaultKubeProxy(),
+		NodeLocalLoadBalancing: DefaultNodeLocalLoadBalancing(),
+		ClusterDomain:          "cluster.local",
 	}
 }
 
 // Validate validates all the settings make sense and should work
 func (n *Network) Validate() []error {
+	if n == nil {
+		return nil
+	}
+
 	var errors []error
-	if n.Provider != "calico" && n.Provider != "custom" && n.Provider != "kuberouter" {
-		errors = append(errors, fmt.Errorf("unsupported network provider: %s", n.Provider))
+
+	if n.Provider == "" {
+		errors = append(errors, field.Required(field.NewPath("provider"), ""))
+	} else if n.Provider != "calico" && n.Provider != "custom" && n.Provider != "kuberouter" {
+		errors = append(errors, field.NotSupported(field.NewPath("provider"), n.Provider, []string{"kuberouter", "calico", "custom"}))
 	}
 
 	_, _, err := net.ParseCIDR(n.PodCIDR)
 	if err != nil {
-		errors = append(errors, fmt.Errorf("invalid pod CIDR %s", n.PodCIDR))
+		errors = append(errors, field.Invalid(field.NewPath("podCIDR"), n.PodCIDR, "invalid CIDR address"))
 	}
 
 	_, _, err = net.ParseCIDR(n.ServiceCIDR)
 	if err != nil {
-		errors = append(errors, fmt.Errorf("invalid service CIDR %s", n.ServiceCIDR))
+		errors = append(errors, field.Invalid(field.NewPath("serviceCIDR"), n.ServiceCIDR, "invalid CIDR address"))
 	}
 
 	if !govalidator.IsDNSName(n.ClusterDomain) {
-		errors = append(errors, fmt.Errorf("invalid clusterDomain %s", n.ClusterDomain))
+		errors = append(errors, field.Invalid(field.NewPath("clusterDomain"), n.ClusterDomain, "invalid DNS name"))
 	}
 
 	if n.DualStack.Enabled {
 		if n.Provider == "calico" && n.Calico.Mode != "bird" {
-			errors = append(errors, fmt.Errorf("network dual stack is supported only for calico mode `bird`"))
+			errors = append(errors, field.Forbidden(field.NewPath("calico", "mode"), "dual stack for calico is only supported for mode `bird`"))
 		}
 		_, _, err := net.ParseCIDR(n.DualStack.IPv6PodCIDR)
 		if err != nil {
-			errors = append(errors, fmt.Errorf("invalid pod IPv6 CIDR %s", n.DualStack.IPv6PodCIDR))
+			errors = append(errors, field.Invalid(field.NewPath("dualStack", "IPv6podCIDR"), n.DualStack.IPv6PodCIDR, "invalid CIDR address"))
 		}
 		_, _, err = net.ParseCIDR(n.DualStack.IPv6ServiceCIDR)
 		if err != nil {
-			errors = append(errors, fmt.Errorf("invalid service IPv6 CIDR %s", n.DualStack.IPv6ServiceCIDR))
+			errors = append(errors, field.Invalid(field.NewPath("dualStack", "IPv6serviceCIDR"), n.DualStack.IPv6ServiceCIDR, "invalid CIDR address"))
 		}
 	}
+
 	errors = append(errors, n.KubeProxy.Validate()...)
+	for _, err := range n.NodeLocalLoadBalancing.Validate(field.NewPath("nodeLocalLoadBalancing")) {
+		errors = append(errors, err)
+	}
+
 	return errors
 }
 
@@ -98,7 +120,7 @@ func (n *Network) Validate() []error {
 func (n *Network) DNSAddress() (string, error) {
 	_, ipnet, err := net.ParseCIDR(n.ServiceCIDR)
 	if err != nil {
-		return "", fmt.Errorf("failed to parse service CIDR %s: %w", n.ServiceCIDR, err)
+		return "", fmt.Errorf("failed to parse service CIDR %q: %w", n.ServiceCIDR, err)
 	}
 
 	address := ipnet.IP.To4()
@@ -114,7 +136,7 @@ func (n *Network) DNSAddress() (string, error) {
 	}
 
 	if !ipnet.Contains(address) {
-		return "", fmt.Errorf("failed to calculate a valid DNS address: %s", address.String())
+		return "", fmt.Errorf("failed to calculate a valid DNS address: %q", address.String())
 	}
 
 	return address.String(), nil
@@ -130,7 +152,7 @@ func (n *Network) InternalAPIAddresses() ([]string, error) {
 
 	parsedCIDRs, err := utilnet.ParseCIDRs(cidrs)
 	if err != nil {
-		return nil, fmt.Errorf("can't parse service cidr to build internal API address: %w", err)
+		return nil, fmt.Errorf("can't parse service CIDR to build internal API address: %w", err)
 	}
 
 	stringifiedAddresses := make([]string, len(parsedCIDRs))
@@ -165,6 +187,13 @@ func (n *Network) UnmarshalJSON(data []byte) error {
 
 	if n.KubeProxy == nil {
 		n.KubeProxy = DefaultKubeProxy()
+	} else {
+		if n.KubeProxy.IPTables == nil {
+			n.KubeProxy.IPTables = DefaultKubeProxyIPTables()
+		}
+		if n.KubeProxy.IPVS == nil {
+			n.KubeProxy.IPVS = DefaultKubeProxyIPVS()
+		}
 	}
 
 	return nil

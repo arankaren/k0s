@@ -13,37 +13,38 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package worker
 
 import (
 	"context"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"os"
 	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
-	"time"
 
-	"github.com/avast/retry-go"
-	"github.com/docker/libnetwork/resolvconf"
-	"github.com/sirupsen/logrus"
+	"github.com/k0sproject/k0s/internal/pkg/dir"
+	"github.com/k0sproject/k0s/internal/pkg/file"
+	"github.com/k0sproject/k0s/internal/pkg/flags"
+	"github.com/k0sproject/k0s/internal/pkg/iptablesutils"
+	"github.com/k0sproject/k0s/internal/pkg/stringmap"
+	"github.com/k0sproject/k0s/pkg/assets"
+	"github.com/k0sproject/k0s/pkg/component/manager"
+	"github.com/k0sproject/k0s/pkg/constant"
+	"github.com/k0sproject/k0s/pkg/supervisor"
+
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/validation"
 	kubeletv1beta1 "k8s.io/kubelet/config/v1beta1"
 	"k8s.io/utils/pointer"
-	"sigs.k8s.io/yaml"
 
-	"github.com/k0sproject/k0s/internal/pkg/dir"
-	"github.com/k0sproject/k0s/internal/pkg/flags"
-	"github.com/k0sproject/k0s/internal/pkg/stringmap"
-	"github.com/k0sproject/k0s/pkg/assets"
-	"github.com/k0sproject/k0s/pkg/component"
-	"github.com/k0sproject/k0s/pkg/constant"
-	"github.com/k0sproject/k0s/pkg/supervisor"
+	"github.com/docker/libnetwork/resolvconf"
+	"github.com/sirupsen/logrus"
+	"sigs.k8s.io/yaml"
 )
 
 // Kubelet is the component implementation to manage kubelet
@@ -51,18 +52,20 @@ type Kubelet struct {
 	CRISocket           string
 	EnableCloudProvider bool
 	K0sVars             constant.CfgVars
-	KubeletConfigClient *KubeletConfigClient
+	Kubeconfig          string
+	Configuration       kubeletv1beta1.KubeletConfiguration
+	StaticPods          StaticPods
 	LogLevel            string
-	Profile             string
 	dataDir             string
 	supervisor          supervisor.Supervisor
 	ClusterDNS          string
 	Labels              []string
 	Taints              []string
 	ExtraArgs           string
+	IPTablesMode        string
 }
 
-var _ component.Component = (*Kubelet)(nil)
+var _ manager.Component = (*Kubelet)(nil)
 
 type kubeletConfig struct {
 	ClientCAFile       string
@@ -71,11 +74,12 @@ type kubeletConfig struct {
 	KubeletCgroups     string
 	CgroupsPerQOS      bool
 	ResolvConf         string
+	StaticPodURL       string
 }
 
 // Init extracts the needed binaries
 func (k *Kubelet) Init(_ context.Context) error {
-	cmds := []string{"kubelet", "xtables-legacy-multi"}
+	cmds := []string{"kubelet", "xtables-legacy-multi", "xtables-nft-multi"}
 
 	if runtime.GOOS == "windows" {
 		cmds = []string{"kubelet.exe"}
@@ -89,13 +93,28 @@ func (k *Kubelet) Init(_ context.Context) error {
 	}
 
 	if runtime.GOOS == "linux" {
-		for _, symlink := range []string{"iptables-save", "iptables-restore", "ip6tables", "ip6tables-save", "ip6tables-restore"} {
+		iptablesMode := k.IPTablesMode
+		if iptablesMode == "" || iptablesMode == "auto" {
+			var err error
+			iptablesMode, err = iptablesutils.DetectHostIPTablesMode(k.K0sVars.BinDir)
+			if err != nil {
+				if KernelMajorVersion() < 5 {
+					iptablesMode = iptablesutils.ModeLegacy
+				} else {
+					iptablesMode = iptablesutils.ModeNFT
+				}
+				logrus.WithError(err).Infof("Failed to detect iptables mode, using iptables-%s by default", iptablesMode)
+			}
+		}
+		logrus.Infof("using iptables-%s", iptablesMode)
+		oldpath := fmt.Sprintf("xtables-%s-multi", iptablesMode)
+		for _, symlink := range []string{"iptables", "iptables-save", "iptables-restore", "ip6tables", "ip6tables-save", "ip6tables-restore"} {
 			symlinkPath := filepath.Join(k.K0sVars.BinDir, symlink)
 
 			// remove if it exist and ignore error if it doesn't
 			_ = os.Remove(symlinkPath)
 
-			err := os.Symlink("xtables-legacy-multi", symlinkPath)
+			err := os.Symlink(oldpath, symlinkPath)
 			if err != nil {
 				return fmt.Errorf("failed to create symlink %s: %w", symlink, err)
 			}
@@ -112,14 +131,23 @@ func (k *Kubelet) Init(_ context.Context) error {
 }
 
 // Run runs kubelet
-func (k *Kubelet) Run(ctx context.Context) error {
+func (k *Kubelet) Start(ctx context.Context) error {
 	cmd := "kubelet"
+
+	var staticPodURL string
+	if k.StaticPods != nil {
+		var err error
+		if staticPodURL, err = k.StaticPods.ManifestURL(); err != nil {
+			return err
+		}
+	}
 
 	kubeletConfigData := kubeletConfig{
 		ClientCAFile:       filepath.Join(k.K0sVars.CertRootDir, "ca.crt"),
 		VolumePluginDir:    k.K0sVars.KubeletVolumePluginDir,
 		KubeReservedCgroup: "system.slice",
 		KubeletCgroups:     "/system.slice/containerd.service",
+		StaticPodURL:       staticPodURL,
 	}
 	if runtime.GOOS == "windows" {
 		cmd = "kubelet.exe"
@@ -132,13 +160,12 @@ func (k *Kubelet) Run(ctx context.Context) error {
 	resolvConfPath := resolvconf.Path()
 
 	args := stringmap.StringMap{
-		"--root-dir":             k.dataDir,
-		"--config":               kubeletConfigPath,
-		"--bootstrap-kubeconfig": k.K0sVars.KubeletBootstrapConfigPath,
-		"--kubeconfig":           k.K0sVars.KubeletAuthConfigPath,
-		"--v":                    k.LogLevel,
-		"--runtime-cgroups":      "/system.slice/containerd.service",
-		"--cert-dir":             filepath.Join(k.dataDir, "pki"),
+		"--root-dir":        k.dataDir,
+		"--config":          kubeletConfigPath,
+		"--kubeconfig":      k.Kubeconfig,
+		"--v":               k.LogLevel,
+		"--runtime-cgroups": "/system.slice/containerd.service",
+		"--cert-dir":        filepath.Join(k.dataDir, "pki"),
 	}
 
 	if len(k.Labels) > 0 {
@@ -177,6 +204,7 @@ func (k *Kubelet) Run(ctx context.Context) error {
 	} else {
 		sockPath := path.Join(k.K0sVars.RunDir, "containerd.sock")
 		args["--container-runtime-endpoint"] = fmt.Sprintf("unix://%s", sockPath)
+		args["--containerd"] = sockPath
 	}
 
 	// We only support external providers
@@ -184,7 +212,7 @@ func (k *Kubelet) Run(ctx context.Context) error {
 		args["--cloud-provider"] = "external"
 	}
 
-	// Handle the extra args as last so they can be used to overrride some k0s "hardcodings"
+	// Handle the extra args as last so they can be used to override some k0s "hardcodings"
 	if k.ExtraArgs != "" {
 		extras := flags.Split(k.ExtraArgs)
 		args.Merge(extras)
@@ -199,29 +227,14 @@ func (k *Kubelet) Run(ctx context.Context) error {
 		Args:    args.ToArgs(),
 	}
 
-	err := retry.Do(func() error {
-		kubeletconfig, err := k.KubeletConfigClient.Get(ctx, k.Profile)
-		if err != nil {
-			logrus.Warnf("failed to get initial kubelet config with join token: %s", err.Error())
-			return err
-		}
-		kubeletconfig, err = k.prepareLocalKubeletConfig(kubeletconfig, kubeletConfigData)
-		if err != nil {
-			logrus.Warnf("failed to prepare local kubelet config: %s", err.Error())
-			return err
-		}
-		err = ioutil.WriteFile(kubeletConfigPath, []byte(kubeletconfig), 0644)
-		if err != nil {
-			return fmt.Errorf("failed to write kubelet config: %w", err)
-		}
-
-		return nil
-	},
-		retry.Context(ctx),
-		retry.Delay(time.Millisecond*500),
-		retry.DelayType(retry.BackOffDelay))
+	kubeletconfig, err := k.prepareLocalKubeletConfig(kubeletConfigData)
 	if err != nil {
+		logrus.Warnf("failed to prepare local kubelet config: %s", err.Error())
 		return err
+	}
+	err = file.WriteContentAtomically(kubeletConfigPath, []byte(kubeletconfig), 0644)
+	if err != nil {
+		return fmt.Errorf("failed to write kubelet config: %w", err)
 	}
 
 	return k.supervisor.Supervise()
@@ -232,22 +245,15 @@ func (k *Kubelet) Stop() error {
 	return k.supervisor.Stop()
 }
 
-// Health-check interface
-func (k *Kubelet) Healthy() error { return nil }
-
-func (k *Kubelet) prepareLocalKubeletConfig(kubeletconfig string, kubeletConfigData kubeletConfig) (string, error) {
-	var kubeletConfiguration kubeletv1beta1.KubeletConfiguration
-	err := yaml.Unmarshal([]byte(kubeletconfig), &kubeletConfiguration)
-	if err != nil {
-		return "", fmt.Errorf("can't unmarshal kubelet config: %v", err)
-	}
-
-	kubeletConfiguration.Authentication.X509.ClientCAFile = kubeletConfigData.ClientCAFile // filepath.Join(k.K0sVars.CertRootDir, "ca.crt")
-	kubeletConfiguration.VolumePluginDir = kubeletConfigData.VolumePluginDir               // k.K0sVars.KubeletVolumePluginDir
-	kubeletConfiguration.KubeReservedCgroup = kubeletConfigData.KubeReservedCgroup
-	kubeletConfiguration.KubeletCgroups = kubeletConfigData.KubeletCgroups
-	kubeletConfiguration.ResolverConfig = pointer.String(kubeletConfigData.ResolvConf)
-	kubeletConfiguration.CgroupsPerQOS = pointer.Bool(kubeletConfigData.CgroupsPerQOS)
+func (k *Kubelet) prepareLocalKubeletConfig(kubeletConfigData kubeletConfig) (string, error) {
+	preparedConfig := k.Configuration.DeepCopy()
+	preparedConfig.Authentication.X509.ClientCAFile = kubeletConfigData.ClientCAFile // filepath.Join(k.K0sVars.CertRootDir, "ca.crt")
+	preparedConfig.VolumePluginDir = kubeletConfigData.VolumePluginDir               // k.K0sVars.KubeletVolumePluginDir
+	preparedConfig.KubeReservedCgroup = kubeletConfigData.KubeReservedCgroup
+	preparedConfig.KubeletCgroups = kubeletConfigData.KubeletCgroups
+	preparedConfig.ResolverConfig = pointer.String(kubeletConfigData.ResolvConf)
+	preparedConfig.CgroupsPerQOS = pointer.Bool(kubeletConfigData.CgroupsPerQOS)
+	preparedConfig.StaticPodURL = kubeletConfigData.StaticPodURL
 
 	if len(k.Taints) > 0 {
 		var taints []corev1.Taint
@@ -258,14 +264,14 @@ func (k *Kubelet) prepareLocalKubeletConfig(kubeletconfig string, kubeletConfigD
 			}
 			taints = append(taints, parsedTaint)
 		}
-		kubeletConfiguration.RegisterWithTaints = taints
+		preparedConfig.RegisterWithTaints = taints
 	}
 
-	localKubeletConfig, err := yaml.Marshal(kubeletConfiguration)
+	preparedConfigBytes, err := yaml.Marshal(preparedConfig)
 	if err != nil {
 		return "", fmt.Errorf("can't marshal kubelet config: %v", err)
 	}
-	return string(localKubeletConfig), nil
+	return string(preparedConfigBytes), nil
 }
 
 const awsMetaInformationURI = "http://169.254.169.254/latest/meta-data/local-hostname"

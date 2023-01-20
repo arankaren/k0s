@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package controller
 
 import (
@@ -56,7 +57,7 @@ func (n *NodeRole) Init(_ context.Context) error {
 }
 
 // Run checks and adds labels
-func (n *NodeRole) Run(ctx context.Context) error {
+func (n *NodeRole) Start(ctx context.Context) error {
 	client, err := n.kubeClientFactory.GetClient()
 	if err != nil {
 		return err
@@ -120,6 +121,3 @@ func (n *NodeRole) addNodeLabel(ctx context.Context, client kubernetes.Interface
 func (n *NodeRole) Stop() error {
 	return nil
 }
-
-// Health-check interface
-func (n *NodeRole) Healthy() error { return nil }

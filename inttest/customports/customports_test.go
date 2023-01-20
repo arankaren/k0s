@@ -18,14 +18,12 @@ package customports
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"html/template"
 	"testing"
 
 	"github.com/k0sproject/k0s/inttest/common"
 	"github.com/stretchr/testify/suite"
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8s "k8s.io/client-go/kubernetes"
 )
 
@@ -120,22 +118,15 @@ func (ds *Suite) TestControllerJoinsWithCustomPort() {
 
 	ds.Require().NoError(err)
 
-	pods, err := kc.CoreV1().Pods("kube-system").List(context.TODO(), v1.ListOptions{
-		Limit: 100,
-	})
-	ds.Require().NoError(err)
-
-	podCount := len(pods.Items)
-	ds.T().Logf("found %d pods in kube-system", podCount)
-	ds.Greater(podCount, 0, "expecting to see few pods in kube-system namespace")
+	ds.AssertSomeKubeSystemPods(kc)
 
 	ds.T().Log("waiting to see CNI pods ready")
-	ds.Require().NoError(common.WaitForKubeRouterReady(kc), "calico did not start")
+	ds.Require().NoError(common.WaitForKubeRouterReady(ds.Context(), kc), "calico did not start")
 	ds.T().Log("waiting to see konnectivity-agent pods ready")
-	ds.Require().NoError(common.WaitForDaemonSet(kc, "konnectivity-agent"), "konnectivity-agent did not start")
+	ds.Require().NoError(common.WaitForDaemonSet(ds.Context(), kc, "konnectivity-agent"), "konnectivity-agent did not start")
 
 	ds.T().Log("waiting to get logs from pods")
-	ds.Require().NoError(common.WaitForPodLogs(kc, "kube-system"))
+	ds.Require().NoError(common.WaitForPodLogs(ds.Context(), kc, "kube-system"))
 
 	// https://github.com/k0sproject/k0s/issues/1202
 	ds.T().Run("kubeconfigIncludesExternalAddress", func(t *testing.T) {
@@ -143,7 +134,7 @@ func (ds *Suite) TestControllerJoinsWithCustomPort() {
 		ds.Require().NoError(err)
 		defer ssh.Disconnect()
 
-		out, err := ssh.ExecWithOutput("/usr/local/bin/k0s kubeconfig create user | awk '$1 == \"server:\" {print $2}'")
+		out, err := ssh.ExecWithOutput(ds.Context(), "/usr/local/bin/k0s kubeconfig create user | awk '$1 == \"server:\" {print $2}'")
 		ds.Require().NoError(err)
 		ds.Require().Equal(fmt.Sprintf("https://%s:%d", ipAddress, kubeAPIPort), out)
 	})

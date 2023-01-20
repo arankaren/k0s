@@ -13,11 +13,11 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package supervisor
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -104,7 +104,7 @@ func TestGetEnv(t *testing.T) {
 
 	env := getEnv("/var/lib/k0s", "foo", false)
 	sort.Strings(env)
-	expected := "[HTTPS_PROXY=a.b.c:1080 PATH=/var/lib/k0s/bin:/usr/local/bin k1=v1 k2=foo_v2 k3=foo_v3 k4=v4]"
+	expected := "[HTTPS_PROXY=a.b.c:1080 PATH=/var/lib/k0s/bin:/usr/local/bin _K0S_MANAGED=yes k1=v1 k2=foo_v2 k3=foo_v3 k4=v4]"
 	actual := fmt.Sprintf("%s", env)
 	if actual != expected {
 		t.Errorf("Failed in env processing with keepEnvPrefix=false, expected: %q, actual: %q", expected, actual)
@@ -112,7 +112,7 @@ func TestGetEnv(t *testing.T) {
 
 	env = getEnv("/var/lib/k0s", "foo", true)
 	sort.Strings(env)
-	expected = "[FOO_PATH=/usr/local/bin FOO_k2=foo_v2 FOO_k3=foo_v3 HTTPS_PROXY=a.b.c:1080 PATH=/var/lib/k0s/bin:/bin k1=v1 k2=v2 k3=v3 k4=v4]"
+	expected = "[FOO_PATH=/usr/local/bin FOO_k2=foo_v2 FOO_k3=foo_v3 HTTPS_PROXY=a.b.c:1080 PATH=/var/lib/k0s/bin:/bin _K0S_MANAGED=yes k1=v1 k2=v2 k3=v3 k4=v4]"
 	actual = fmt.Sprintf("%s", env)
 	if actual != expected {
 		t.Errorf("Failed in env processing with keepEnvPrefix=true, expected: %q, actual: %q", expected, actual)
@@ -153,7 +153,7 @@ func TestRespawn(t *testing.T) {
 	}
 
 	// wait til process starts up. fifo will block the write til process reads it
-	err = ioutil.WriteFile(pingFifoPath, []byte("ping 1"), 0644)
+	err = os.WriteFile(pingFifoPath, []byte("ping 1"), 0644)
 	if err != nil {
 		t.Errorf("Failed to write to fifo %s: %v", pingFifoPath, err)
 	}
@@ -162,10 +162,10 @@ func TestRespawn(t *testing.T) {
 	process := s.GetProcess()
 
 	// read the pong to unblock the process so it can exit
-	_, _ = ioutil.ReadFile(pongFifoPath)
+	_, _ = os.ReadFile(pongFifoPath)
 
 	// wait til the respawned process again reads the ping fifo
-	err = ioutil.WriteFile(pingFifoPath, []byte("ping 2"), 0644)
+	err = os.WriteFile(pingFifoPath, []byte("ping 2"), 0644)
 	if err != nil {
 		t.Errorf("Failed to write to fifo %s: %v", pingFifoPath, err)
 	}

@@ -18,7 +18,6 @@ package addons
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -42,15 +41,19 @@ type AddonsSuite struct {
 
 func (as *AddonsSuite) TestHelmBasedAddons() {
 	addonName := "test-addon"
+	ociAddonName := "oci-test"
 	as.PutFile(as.ControllerNode(0), "/tmp/k0s.yaml", fmt.Sprintf(k0sConfigWithAddon, addonName))
 
 	as.Require().NoError(as.InitController(0, "--config=/tmp/k0s.yaml"))
 	as.NoError(as.RunWorkers())
 	kc, err := as.KubeClient(as.ControllerNode(0))
-	as.NoError(err)
+	as.Require().NoError(err)
 	err = as.WaitForNodeReady(as.WorkerNode(0), kc)
 	as.NoError(err)
-	as.waitForTestRelease(addonName, 1)
+	as.waitForTestRelease(addonName, "0.4.0", 1)
+	as.waitForTestRelease(ociAddonName, "0.6.0", 1)
+
+	as.AssertSomeKubeSystemPods(kc)
 
 	values := map[string]interface{}{
 		"replicaCount": 2,
@@ -59,7 +62,7 @@ func (as *AddonsSuite) TestHelmBasedAddons() {
 		},
 	}
 	as.doTestAddonUpdate(addonName, values)
-	chart := as.waitForTestRelease(addonName, 2)
+	chart := as.waitForTestRelease(addonName, "0.4.0", 2)
 	as.Require().NoError(as.checkCustomValues(chart.Status.ReleaseName))
 	as.doPrometheusDelete(chart)
 }
@@ -70,7 +73,7 @@ func (as *AddonsSuite) doPrometheusDelete(chart *v1beta1.Chart) {
 	as.Require().NoError(err)
 	defer ssh.Disconnect()
 
-	_, err = ssh.ExecWithOutput("rm /var/lib/k0s/manifests/helm/addon_crd_manifest_test-addon.yaml")
+	_, err = ssh.ExecWithOutput(as.Context(), "rm /var/lib/k0s/manifests/helm/addon_crd_manifest_test-addon.yaml")
 	as.Require().NoError(err)
 
 	cfg, err := as.GetKubeConfig(as.ControllerNode(0))
@@ -79,7 +82,7 @@ func (as *AddonsSuite) doPrometheusDelete(chart *v1beta1.Chart) {
 	as.Require().NoError(err)
 	as.Require().NoError(wait.PollImmediate(time.Second, 5*time.Minute, func() (done bool, err error) {
 		as.T().Logf("Expecting have no secrets left for release %s/%s", chart.Namespace, chart.Name)
-		items, err := k8sclient.CoreV1().Secrets("default").List(context.Background(), v1.ListOptions{})
+		items, err := k8sclient.CoreV1().Secrets("default").List(as.Context(), v1.ListOptions{})
 		if err != nil {
 			as.T().Logf("listing secrets error %s", err.Error())
 			return false, nil
@@ -92,7 +95,7 @@ func (as *AddonsSuite) doPrometheusDelete(chart *v1beta1.Chart) {
 	}))
 }
 
-func (as *AddonsSuite) waitForTestRelease(addonName string, rev int64) *v1beta1.Chart {
+func (as *AddonsSuite) waitForTestRelease(addonName, appVersion string, rev int64) *v1beta1.Chart {
 	as.T().Logf("waiting to see test-addon release ready in kube API, generation %d", rev)
 
 	cfg, err := as.GetKubeConfig(as.ControllerNode(0))
@@ -105,7 +108,7 @@ func (as *AddonsSuite) waitForTestRelease(addonName string, rev int64) *v1beta1.
 	as.Require().NoError(err)
 	var chart v1beta1.Chart
 	as.Require().NoError(wait.PollImmediate(time.Second, 5*time.Minute, func() (done bool, err error) {
-		err = chartClient.Get(context.Background(), client.ObjectKey{
+		err = chartClient.Get(as.Context(), client.ObjectKey{
 			Namespace: "kube-system",
 			Name:      fmt.Sprintf("k0s-addon-chart-%s", addonName),
 		}, &chart)
@@ -124,7 +127,7 @@ func (as *AddonsSuite) waitForTestRelease(addonName string, rev int64) *v1beta1.
 		}
 
 		as.Require().Equal("default", chart.Status.Namespace)
-		as.Require().Equal("0.4.0", chart.Status.AppVersion)
+		as.Require().Equal(appVersion, chart.Status.AppVersion)
 		as.Require().Equal("default", chart.Status.Namespace)
 		as.Require().NotEmpty(chart.Status.ReleaseName)
 		as.Require().Empty(chart.Status.Error)
@@ -144,7 +147,7 @@ func (as *AddonsSuite) checkCustomValues(releaseName string) error {
 	}
 	return wait.PollImmediate(time.Second, 2*time.Minute, func() (done bool, err error) {
 		serverDeployment := fmt.Sprintf("%s-echo-server", releaseName)
-		d, err := kc.AppsV1().Deployments("default").Get(context.TODO(), serverDeployment, v1.GetOptions{})
+		d, err := kc.AppsV1().Deployments("default").Get(as.Context(), serverDeployment, v1.GetOptions{})
 		if err != nil {
 			return false, nil
 		}
@@ -205,6 +208,11 @@ spec:
           - name: %s
             chartname: ealenn/echo-server
             version: "0.3.1"
+            values: ""
+            namespace: default
+          - name: oci-test
+            chartname: oci://ghcr.io/makhov/k0s-charts/echo-server
+            version: "0.5.0"
             values: ""
             namespace: default
 `

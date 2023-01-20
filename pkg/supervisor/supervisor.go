@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package supervisor
 
 import (
@@ -48,6 +49,12 @@ type Supervisor struct {
 	TimeoutRespawn time.Duration
 	// For those components having env prefix convention such as ETCD_xxx, we should keep the prefix.
 	KeepEnvPrefix bool
+	// ProcFSPath is only used for testing
+	ProcFSPath string
+	// KillFunction is only used for testing
+	KillFunction func(int, syscall.Signal) error
+	// A function to clean some leftovers before starting or restarting the supervised process
+	CleanBeforeFn func() error
 
 	cmd            *exec.Cmd
 	done           chan bool
@@ -56,6 +63,8 @@ type Supervisor struct {
 	startStopMutex sync.Mutex
 	cancel         context.CancelFunc
 }
+
+const k0sManaged = "_K0S_MANAGED=yes"
 
 // processWaitQuit waits for a process to exit or a shut down signal
 // returns true if shutdown is requested
@@ -120,6 +129,10 @@ func (s *Supervisor) Supervise() error {
 		s.TimeoutRespawn = 5 * time.Second
 	}
 
+	if err := s.maybeKillPidFile(nil, nil); err != nil {
+		return err
+	}
+
 	var ctx context.Context
 	ctx, s.cancel = context.WithCancel(context.Background())
 	started := make(chan error)
@@ -134,18 +147,27 @@ func (s *Supervisor) Supervise() error {
 		restarts := 0
 		for {
 			s.mutex.Lock()
-			s.cmd = exec.Command(s.BinPath, s.Args...)
-			s.cmd.Dir = s.DataDir
-			s.cmd.Env = getEnv(s.DataDir, s.Name, s.KeepEnvPrefix)
 
-			// detach from the process group so children don't
-			// get signals sent directly to parent.
-			s.cmd.SysProcAttr = DetachAttr(s.UID, s.GID)
+			var err error
+			if s.CleanBeforeFn != nil {
+				err = s.CleanBeforeFn()
+			}
+			if err != nil {
+				s.log.Warnf("Failed to clean before running the process %s: %s", s.BinPath, err)
+			} else {
+				s.cmd = exec.Command(s.BinPath, s.Args...)
+				s.cmd.Dir = s.DataDir
+				s.cmd.Env = getEnv(s.DataDir, s.Name, s.KeepEnvPrefix)
 
-			// s.cmd.Stdout = s.log.Writer()
-			// s.cmd.Stderr = s.log.Writer()
+				// detach from the process group so children don't
+				// get signals sent directly to parent.
+				s.cmd.SysProcAttr = DetachAttr(s.UID, s.GID)
 
-			err := s.cmd.Start()
+				s.cmd.Stdout = s.log.Writer()
+				s.cmd.Stderr = s.log.Writer()
+
+				err = s.cmd.Start()
+			}
 			s.mutex.Unlock()
 			if err != nil {
 				s.log.Warnf("Failed to start: %s", err)
@@ -242,6 +264,8 @@ func getEnv(dataDir, component string, keepEnvPrefix bool) []string {
 		}
 		i++
 	}
+	env = append([]string{k0sManaged}, env...)
+	i++
 
 	return env[:i]
 }

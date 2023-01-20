@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package v1beta1
 
 import (
@@ -29,6 +30,29 @@ func getConfigYAML(t *testing.T, c *ClusterConfig) []byte {
 	res, err := yaml.Marshal(c)
 	require.NoError(t, err)
 	return res
+}
+
+func TestClusterImages_Customized(t *testing.T) {
+	yamlData := `
+apiVersion: k0s.k0sproject.io/v1beta1s
+kind: ClusterConfig
+spec:
+  images:
+    konnectivity:
+      image: custom-repository/my-custom-konnectivity-image
+      version: v0.0.1
+    coredns:
+      image: custom.io/coredns/coredns
+      version: 1.0.0
+`
+	cfg, err := ConfigFromString(yamlData)
+	require.NoError(t, err)
+	a := cfg.Spec.Images
+
+	assert.Equal(t, "custom-repository/my-custom-konnectivity-image:v0.0.1", a.Konnectivity.URI())
+	assert.Equal(t, "1.0.0", a.CoreDNS.Version)
+	assert.Equal(t, "custom.io/coredns/coredns", a.CoreDNS.Image)
+	assert.Equal(t, "registry.k8s.io/metrics-server/metrics-server", a.MetricsServer.Image)
 }
 
 func TestImagesRepoOverrideInConfiguration(t *testing.T) {

@@ -1,6 +1,7 @@
 # Autopilot
 
 A tool for updating your `k0s` controller and worker nodes using specialized plans.
+There is a public update-server hosted on the same domain as the documentation site. See the example below on how to use it. There is only a single channel `edge_release`  available. The channel exposes the latest  released version.
 
 ## How it works
 
@@ -15,28 +16,19 @@ A tool for updating your `k0s` controller and worker nodes using specialized pla
 
 ## Automatic updates
 
-To enable automatic updates, create an `UpdaterConfig` object:
+To enable automatic updates, create an `UpdateConfig` object:
 
 ```yaml
 apiVersion: autopilot.k0sproject.io/v1beta2
-kind: UpdaterConfig
+kind: UpdateConfig
 metadata:
   name: example
+  namespace: default
 spec:
-  channel: stable
-  updateServer: https://updates.k0sproject.io/
+  channel: edge_release
+  updateServer: https://docs.k0sproject.io/
   upgradeStrategy:
     cron: "0 12 * * TUE,WED" # Check for updates at 12:00 on Tuesday and Wednesday.
-  # Optional. Specifies a created Plan object
-  planSpec:                  
-    command: update
-    targets:
-      controllers:
-        discovery:
-          selector: {}
-      workers:
-        discovery:
-          selector: {}
 ```
 
 ## Safeguards
@@ -104,10 +96,10 @@ spec:
 
   commands:
     - k0supdate:
-        version: v1.24.2+k0s.0
+        version: v1.26.0+k0s.0
         platforms:
           linux-amd64:
-            url: https://github.com/k0sproject/k0s/releases/download/v1.24.2+k0s.0/k0s-v1.24.2+k0s.0-amd64
+            url: https://github.com/k0sproject/k0s/releases/download/v1.26.0+k0s.0/k0s-v1.26.0+k0s.0-amd64
             sha256: 15469210b61da094c6783e65c15a4ac951e1c4c50ff9cf13f30437ada48f446b
         targets:
           controllers:
@@ -370,7 +362,49 @@ Similar to the **Plan Status**, the individual nodes can have their own statuses
 
 #### `spec.planSpec <string> (optional)`
 
-* [Plan specification](#Spec Fields).
+* Describes the behavior of the autopilot generated `Plan`
+
+### Example
+
+```yaml
+apiVersion: autopilot.k0sproject.io/v1beta2
+kind: UpdaterConfig
+metadata:
+  name: example
+spec:
+  channel: stable
+  updateServer: https://updates.k0sproject.io/
+  upgradeStrategy:
+    cron: "0 12 * * TUE,WED" # Check for updates at 12:00 on Tuesday and Wednesday.
+  # Optional. Specifies a created Plan object
+  planSpec:
+    commands:
+      - k0supdate: # optional
+          forceupdate: true # optional
+          targets:
+            controllers:
+              discovery:
+                static:
+                  nodes:
+                    - ip-172-31-44-131
+                    - ip-172-31-42-134
+                    - ip-172-31-39-65
+            workers:
+              limits:
+                concurrent: 5
+              discovery:
+                selector:
+                  labels: environment=staging
+                  fields: metadata.name=worker2
+        airgapupdate: # optional
+          workers:
+            limits:
+              concurrent: 5
+            discovery:
+              selector:
+                labels: environment=staging
+                fields: metadata.name=worker2
+```
 
 ## FAQ
 
@@ -394,16 +428,3 @@ https://kubernetes.io/releases/version-skew-policy/
 
 > Make sure that your controllers are at the desired version **first** before
 > upgrading workers.
-
-### Q: If running workers in a Pod, what minimum RBAC access is needed?
-
-The following RBAC entries are required for running **autopilot** workers in Pods.
-
-| API Group | Resource | Verbs |
-| --------- | -------- | ----- |
-| `autopilot.k0sproject.io` | `plans` | `list`, `watch` |
-| `autopilot.k0sproject.io` | `plans/status` | `update` |
-| `apps` | `daemonsets` | `get` |
-| (empty) | `nodes` | `list`, `patch`, `update`, `watch` |
-| (empty) | `pods` | `list` |
-| (empty) | `pods/eviction` | `create` |

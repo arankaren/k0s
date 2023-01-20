@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package worker
 
 import (
@@ -24,9 +25,9 @@ import (
 	apcli "github.com/k0sproject/k0s/pkg/autopilot/client"
 	apcont "github.com/k0sproject/k0s/pkg/autopilot/controller"
 	aproot "github.com/k0sproject/k0s/pkg/autopilot/controller/root"
+	"github.com/k0sproject/k0s/pkg/component/manager"
 	"github.com/sirupsen/logrus"
 
-	"github.com/k0sproject/k0s/pkg/component"
 	"github.com/k0sproject/k0s/pkg/constant"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/rest"
@@ -37,34 +38,31 @@ const (
 	defaultPollTimeout  = 5 * time.Minute
 )
 
-var _ component.Component = (*Autopilot)(nil)
+var _ manager.Component = (*Autopilot)(nil)
 
 type Autopilot struct {
-	K0sVars constant.CfgVars
+	K0sVars     constant.CfgVars
+	CertManager *CertificateManager
 }
 
 func (a *Autopilot) Init(ctx context.Context) error {
 	return nil
 }
 
-func (a *Autopilot) Run(ctx context.Context) error {
+func (a *Autopilot) Start(ctx context.Context) error {
 	log := logrus.WithFields(logrus.Fields{"component": "autopilot"})
 
 	// Wait 5 mins till we see kubelet auth config in place
 	timeout, cancel := context.WithTimeout(ctx, defaultPollTimeout)
 	defer cancel()
 
-	// Poll until the kubelet config can be loaded successfully, as this is the access to the kube api
-	// needed by autopilot.
-
 	var restConfig *rest.Config
 	// wait.PollUntilWithContext passes it is own ctx argument as a ctx to the given function
-	// we can't use timeouted context as an argument for the GetRestConfig and the default argument naming in the condition-function
-	// shadows the parent context so saving it here as an explicit variable to use
-	parentCtx := ctx
+	// Poll until the kubelet config can be loaded successfully, as this is the access to the kube api
+	// needed by autopilot.
 	if err := wait.PollUntilWithContext(timeout, defaultPollDuration, func(ctx context.Context) (done bool, err error) {
 		log.Debugf("Attempting to load autopilot client config")
-		if restConfig, err = GetRestConfig(parentCtx, a.K0sVars.KubeletAuthConfigPath); err != nil {
+		if restConfig, err = a.CertManager.GetRestConfig(); err != nil {
 			log.WithError(err).Warnf("Failed to load autopilot client config, retrying in %v", defaultPollDuration)
 			return false, nil
 		}
@@ -113,6 +111,3 @@ func (a *Autopilot) Run(ctx context.Context) error {
 func (a *Autopilot) Stop() error {
 	return nil
 }
-
-// Health-check interface
-func (a *Autopilot) Healthy() error { return nil }

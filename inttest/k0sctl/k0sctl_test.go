@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package k0sctl
 
 import (
@@ -112,7 +113,7 @@ func (s *K0sctlSuite) k0sctlInitConfig() map[string]interface{} {
 
 	for _, m := range machines {
 		port, err := m.HostPort(22)
-		s.NoError(err)
+		s.Require().NoError(err)
 		addresses = append(addresses, fmt.Sprintf("127.0.0.1:%d", port))
 	}
 
@@ -125,7 +126,7 @@ func (s *K0sctlSuite) k0sctlInitConfig() map[string]interface{} {
 	cmd := exec.Command("./k0sctl", args...)
 	cmd.Env = s.k0sctlEnv
 	out, err := cmd.Output()
-	s.NoError(err)
+	s.Require().NoError(err)
 
 	cfg := map[string]interface{}{}
 	err = yaml.Unmarshal(out, &cfg)

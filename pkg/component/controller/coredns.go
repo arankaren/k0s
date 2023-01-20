@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package controller
 
 import (
@@ -23,7 +24,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/k0sproject/k0s/pkg/component"
+	"github.com/k0sproject/k0s/pkg/component/manager"
 
 	"github.com/sirupsen/logrus"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -61,11 +62,12 @@ rules:
   - list
   - watch
 - apiGroups:
-  - ""
+  - discovery.k8s.io
   resources:
-  - nodes
+  - endpointslices
   verbs:
-  - get
+  - list
+  - watch
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -141,19 +143,17 @@ spec:
           operator: "Exists"
           effect: "NoSchedule"
       nodeSelector:
-        beta.kubernetes.io/os: linux
-      # Prefer running coredns replicas on different nodes
+        kubernetes.io/os: linux
+      # Require running coredns replicas on different nodes
       affinity:
         podAntiAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-          - weight: 100
-            podAffinityTerm:
-              topologyKey: "kubernetes.io/hostname"
-              labelSelector:
-                matchExpressions:
-                - key: k8s-app
-                  operator: In
-                  values: ['kube-dns']
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - topologyKey: "kubernetes.io/hostname"
+            labelSelector:
+              matchExpressions:
+              - key: k8s-app
+                operator: In
+                values: ['kube-dns']
       containers:
       - name: coredns
         image: {{ .Image }}
@@ -246,8 +246,8 @@ spec:
 
 const HostsPerExtraReplica = 10.0
 
-var _ component.Component = (*CoreDNS)(nil)
-var _ component.ReconcilerComponent = (*CoreDNS)(nil)
+var _ manager.Component = (*CoreDNS)(nil)
+var _ manager.Reconciler = (*CoreDNS)(nil)
 
 // CoreDNS is the component implementation to manage CoreDNS
 type CoreDNS struct {
@@ -291,7 +291,7 @@ func (c *CoreDNS) Init(_ context.Context) error {
 }
 
 // Run runs the CoreDNS reconciler component
-func (c *CoreDNS) Run(ctx context.Context) error {
+func (c *CoreDNS) Start(ctx context.Context) error {
 	ctx, c.stopFunc = context.WithCancel(ctx)
 
 	go func() {
@@ -387,6 +387,3 @@ func (c *CoreDNS) Reconcile(ctx context.Context, clusterConfig *v1beta1.ClusterC
 	c.lastKnownClusterConfig = clusterConfig
 	return nil
 }
-
-// Health-check interface
-func (c *CoreDNS) Healthy() error { return nil }

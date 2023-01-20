@@ -13,10 +13,10 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package metricscraper
 
 import (
-	"context"
 	"strings"
 	"testing"
 	"time"
@@ -55,7 +55,7 @@ func (s *MetricScraperSuite) waitForPushgateway() error {
 	}
 
 	return wait.PollImmediate(time.Second, 2*time.Minute, func() (done bool, err error) {
-		pods, err := kc.CoreV1().Pods("k0s-system").List(context.TODO(), v1.ListOptions{})
+		pods, err := kc.CoreV1().Pods("k0s-system").List(s.Context(), v1.ListOptions{})
 		if err != nil {
 			return false, nil
 		}
@@ -80,7 +80,7 @@ func (s *MetricScraperSuite) waitForMetrics() error {
 
 	return wait.PollImmediate(time.Second*5, 2*time.Minute, func() (done bool, err error) {
 
-		b, err := kc.RESTClient().Get().AbsPath("/api/v1/namespaces/k0s-system/services/http:k0s-pushgateway:http/proxy/metrics").DoRaw(context.Background())
+		b, err := kc.RESTClient().Get().AbsPath("/api/v1/namespaces/k0s-system/services/http:k0s-pushgateway:http/proxy/metrics").DoRaw(s.Context())
 		if err != nil {
 			return false, nil
 		}

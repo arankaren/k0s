@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package metrics
 
 import (
@@ -32,15 +33,15 @@ func (s *MetricsSuite) TestK0sGetsUp() {
 	s.NoError(s.RunWorkers())
 
 	kc, err := s.KubeClient(s.ControllerNode(0))
-	s.NoError(err)
+	s.Require().NoError(err)
 
 	err = s.WaitForNodeReady(s.WorkerNode(0), kc)
 	s.NoError(err)
 
 	cfg, err := s.GetKubeConfig(s.ControllerNode(0))
-	s.NoError(err)
+	s.Require().NoError(err)
 	s.T().Log("waiting to see metrics ready")
-	s.Require().NoError(common.WaitForMetricsReady(cfg))
+	s.Require().NoError(common.WaitForMetricsReady(s.Context(), cfg))
 }
 
 func TestMetricsSuite(t *testing.T) {

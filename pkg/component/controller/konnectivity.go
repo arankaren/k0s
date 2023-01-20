@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package controller
 
 import (
@@ -33,9 +34,9 @@ import (
 	"github.com/k0sproject/k0s/internal/pkg/users"
 	"github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
 	"github.com/k0sproject/k0s/pkg/assets"
-	"github.com/k0sproject/k0s/pkg/component"
+	"github.com/k0sproject/k0s/pkg/component/manager"
+	"github.com/k0sproject/k0s/pkg/component/prober"
 	"github.com/k0sproject/k0s/pkg/constant"
-	k8sutil "github.com/k0sproject/k0s/pkg/kubernetes"
 	kubeutil "github.com/k0sproject/k0s/pkg/kubernetes"
 	"github.com/k0sproject/k0s/pkg/supervisor"
 )
@@ -46,7 +47,7 @@ type Konnectivity struct {
 	LogLevel   string
 	SingleNode bool
 	// used for lease lock
-	KubeClientFactory k8sutil.ClientFactoryInterface
+	KubeClientFactory kubeutil.ClientFactoryInterface
 	NodeConfig        *v1beta1.ClusterConfig
 
 	supervisor          *supervisor.Supervisor
@@ -59,35 +60,44 @@ type Konnectivity struct {
 	leaseCounterRunning bool
 	previousConfig      konnectivityAgentConfig
 	agentManifestLock   sync.Mutex
+	*prober.EventEmitter
 }
 
-var _ component.Component = (*Konnectivity)(nil)
-var _ component.ReconcilerComponent = (*Konnectivity)(nil)
+var _ manager.Component = (*Konnectivity)(nil)
+var _ manager.Reconciler = (*Konnectivity)(nil)
 
 // Init ...
 func (k *Konnectivity) Init(_ context.Context) error {
 	var err error
 	k.uid, err = users.GetUID(constant.KonnectivityServerUser)
 	if err != nil {
+		k.EmitWithPayload("error getting UID for", err)
 		logrus.Warning(fmt.Errorf("running konnectivity as root: %w", err))
 	}
 	err = dir.Init(k.K0sVars.KonnectivitySocketDir, 0755)
 	if err != nil {
+		k.EmitWithPayload("failed to initialize socket directory", err)
 		return fmt.Errorf("failed to initialize directory %s: %v", k.K0sVars.KonnectivitySocketDir, err)
 	}
 
 	err = os.Chown(k.K0sVars.KonnectivitySocketDir, k.uid, -1)
 	if err != nil && os.Geteuid() == 0 {
+		k.EmitWithPayload("failed to chown socket directory", err)
 		return fmt.Errorf("failed to chown %s: %v", k.K0sVars.KonnectivitySocketDir, err)
 	}
 
 	k.log = logrus.WithFields(logrus.Fields{"component": "konnectivity"})
+	if err := assets.Stage(k.K0sVars.BinDir, "konnectivity-server", constant.BinDirMode); err != nil {
+		k.EmitWithPayload("failed to stage konnectivity-server", err)
+		return fmt.Errorf("failed to stage konnectivity-server binary %v", err)
 
-	return assets.Stage(k.K0sVars.BinDir, "konnectivity-server", constant.BinDirMode)
+	}
+	defer k.Emit("succesfully initialized konnectivity component")
+	return nil
 }
 
 // Run ..
-func (k *Konnectivity) Run(ctx context.Context) error {
+func (k *Konnectivity) Start(ctx context.Context) error {
 	// Buffered chan to send updates for the count of servers
 	k.serverCountChan = make(chan int, 1)
 
@@ -116,23 +126,24 @@ func (k *Konnectivity) defaultArgs() stringmap.StringMap {
 		logrus.Errorf("failed to fetch machine ID for konnectivity-server")
 	}
 	return stringmap.StringMap{
-		"--uds-name":                filepath.Join(k.K0sVars.KonnectivitySocketDir, "konnectivity-server.sock"),
-		"--cluster-cert":            filepath.Join(k.K0sVars.CertRootDir, "server.crt"),
-		"--cluster-key":             filepath.Join(k.K0sVars.CertRootDir, "server.key"),
-		"--kubeconfig":              k.K0sVars.KonnectivityKubeConfigPath,
-		"--mode":                    "grpc",
-		"--server-port":             "0",
-		"--agent-port":              fmt.Sprintf("%d", k.clusterConfig.Spec.Konnectivity.AgentPort),
-		"--admin-port":              fmt.Sprintf("%d", k.clusterConfig.Spec.Konnectivity.AdminPort),
-		"--agent-namespace":         "kube-system",
-		"--agent-service-account":   "konnectivity-agent",
-		"--authentication-audience": "system:konnectivity-server",
-		"--logtostderr":             "true",
-		"--stderrthreshold":         "1",
-		"--v":                       k.LogLevel,
-		"--enable-profiling":        "false",
-		"--server-id":               machineID.ID(),
-		"--proxy-strategies":        "destHost,default",
+		"--uds-name":                 filepath.Join(k.K0sVars.KonnectivitySocketDir, "konnectivity-server.sock"),
+		"--cluster-cert":             filepath.Join(k.K0sVars.CertRootDir, "server.crt"),
+		"--cluster-key":              filepath.Join(k.K0sVars.CertRootDir, "server.key"),
+		"--kubeconfig":               k.K0sVars.KonnectivityKubeConfigPath,
+		"--mode":                     "grpc",
+		"--server-port":              "0",
+		"--agent-port":               fmt.Sprintf("%d", k.clusterConfig.Spec.Konnectivity.AgentPort),
+		"--admin-port":               fmt.Sprintf("%d", k.clusterConfig.Spec.Konnectivity.AdminPort),
+		"--agent-namespace":          "kube-system",
+		"--agent-service-account":    "konnectivity-agent",
+		"--authentication-audience":  "system:konnectivity-server",
+		"--logtostderr":              "true",
+		"--stderrthreshold":          "1",
+		"--v":                        k.LogLevel,
+		"--enable-profiling":         "false",
+		"--delete-existing-uds-file": "true",
+		"--server-id":                machineID.ID(),
+		"--proxy-strategies":         "destHost,default",
 	}
 }
 
@@ -142,9 +153,14 @@ func (k *Konnectivity) runServer(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			k.Emit("stopped konnectivity server")
 			logrus.Info("stopping konnectivity server reconfig loop")
 			return
 		case count := <-k.serverCountChan:
+			if k.clusterConfig == nil {
+				k.Emit("skipping konnectivity server start, cluster config not yet available")
+				continue
+			}
 			// restart only if the count actually changes and we've got the global config
 			if count != k.serverCount && k.clusterConfig != nil {
 				args := k.defaultArgs()
@@ -154,6 +170,8 @@ func (k *Konnectivity) runServer(ctx context.Context) {
 				}
 				// Stop supervisor
 				if k.supervisor != nil {
+					k.EmitWithPayload("restarting konnectivity server due to server count change",
+						map[string]interface{}{"serverCount": count})
 					if err := k.supervisor.Stop(); err != nil {
 						logrus.Errorf("failed to stop supervisor: %s", err)
 						// TODO Should we just return? That means other part will continue to run but the server is never properly restarted
@@ -170,6 +188,7 @@ func (k *Konnectivity) runServer(ctx context.Context) {
 				}
 				err := k.supervisor.Supervise()
 				if err != nil {
+					k.EmitWithPayload("failed to run konnectivity server", err)
 					logrus.Errorf("failed to start konnectivity supervisor: %s", err)
 					k.supervisor = nil // not to make the next loop to try to stop it first
 					continue
@@ -177,8 +196,10 @@ func (k *Konnectivity) runServer(ctx context.Context) {
 				k.serverCount = count
 
 				if err := k.writeKonnectivityAgent(); err != nil {
+					k.EmitWithPayload("failed to write konnectivity agent config", err)
 					logrus.Errorf("failed to update konnectivity-agent template: %s", err)
 				}
+				k.EmitWithPayload("started konnectivity server", map[string]interface{}{"serverCount": count})
 			}
 		}
 	}
@@ -197,14 +218,25 @@ func (k *Konnectivity) Stop() error {
 	return k.supervisor.Stop()
 }
 
+func (k *Konnectivity) Healthy() error {
+	if k.clusterConfig == nil {
+		return fmt.Errorf("cluster config not yet available")
+	}
+
+	return nil
+}
+
 type konnectivityAgentConfig struct {
-	APIAddress             string
-	AgentPort              int64
-	KASPort                int64
-	Image                  string
-	ServerCount            int
-	PullPolicy             string
-	TunneledNetworkingMode bool
+	ProxyServerHost      string
+	ProxyServerPort      uint16
+	AgentPort            uint16
+	Image                string
+	ServerCount          int
+	PullPolicy           string
+	HostNetwork          bool
+	BindToNodeIP         bool
+	APIServerPortMapping string
+	FeatureGates         string
 }
 
 func (k *Konnectivity) writeKonnectivityAgent() error {
@@ -216,13 +248,61 @@ func (k *Konnectivity) writeKonnectivityAgent() error {
 		return err
 	}
 	cfg := konnectivityAgentConfig{
-		APIAddress:             k.NodeConfig.Spec.API.APIAddress(), // TODO: should it be an APIAddress?
-		AgentPort:              k.clusterConfig.Spec.Konnectivity.AgentPort,
-		KASPort:                int64(k.clusterConfig.Spec.API.Port),
-		Image:                  k.clusterConfig.Spec.Images.Konnectivity.URI(),
-		ServerCount:            k.serverCount,
-		PullPolicy:             k.clusterConfig.Spec.Images.DefaultPullPolicy,
-		TunneledNetworkingMode: k.clusterConfig.Spec.API.TunneledNetworkingMode,
+		// Since the konnectivity server runs with hostNetwork=true this is the
+		// IP address of the master machine
+		ProxyServerHost: k.NodeConfig.Spec.API.APIAddress(), // TODO: should it be an APIAddress?
+		ProxyServerPort: uint16(k.clusterConfig.Spec.Konnectivity.AgentPort),
+		Image:           k.clusterConfig.Spec.Images.Konnectivity.URI(),
+		ServerCount:     k.serverCount,
+		PullPolicy:      k.clusterConfig.Spec.Images.DefaultPullPolicy,
+	}
+
+	if k.NodeConfig.Spec.API.TunneledNetworkingMode {
+		cfg.HostNetwork = true
+		cfg.BindToNodeIP = true // agent needs to listen on the node IP to be on pair with the tunneled network reconciler
+		cfg.APIServerPortMapping = fmt.Sprintf("6443:localhost:%d", k.clusterConfig.Spec.API.Port)
+	} else {
+		cfg.FeatureGates = "NodeToMasterTraffic=false"
+	}
+
+	if k.clusterConfig.Spec.Network != nil {
+		nllb := k.clusterConfig.Spec.Network.NodeLocalLoadBalancing
+		if nllb.IsEnabled() {
+			switch nllb.Type {
+			case v1beta1.NllbTypeEnvoyProxy:
+				k.log.Debugf("Enabling node-local load balancing via %s", nllb.Type)
+
+				// FIXME: Transitions from non-node-local load balanced to
+				// node-local load balanced setups will be problematic: The
+				// controller will update the DaemonSet with localhost, but the
+				// worker nodes won't reconcile their state (yet) and need to be
+				// restarted manually in order to start their load balancer.
+				// Transitions in the other direction suffer from the same
+				// limitation, but that will be less grave, as the node-local
+				// load balancers will remain operational until the next node
+				// restart and the agents will stay connected.
+
+				// The node-local load balancer will run in the host network, so
+				// the agent needs to do the same in order to use it.
+				cfg.HostNetwork = true
+
+				// FIXME: This is not exactly on par with the way it's
+				// implemented on the worker side, i.e. there's no fallback if
+				// localhost doesn't resolve to a loopback address. But this
+				// would require some shenanigans to pull in node-specific
+				// values here. A possible solution would be to convert the
+				// konnectivity agent to a static Pod as well.
+				cfg.ProxyServerHost = "localhost"
+
+				if nllb.EnvoyProxy.KonnectivityServerBindPort != nil {
+					cfg.ProxyServerPort = uint16(*nllb.EnvoyProxy.KonnectivityServerBindPort)
+				} else {
+					cfg.ProxyServerPort = uint16(*v1beta1.DefaultEnvoyProxy().KonnectivityServerBindPort)
+				}
+			default:
+				return fmt.Errorf("unsupported node-local load balancer type: %q", k.clusterConfig.Spec.Network.NodeLocalLoadBalancing.Type)
+			}
+		}
 	}
 
 	if cfg == k.previousConfig {
@@ -238,9 +318,11 @@ func (k *Konnectivity) writeKonnectivityAgent() error {
 	}
 	err = tw.Write()
 	if err != nil {
+		k.EmitWithPayload("failed to write konnectivity agent manifest", err)
 		return fmt.Errorf("failed to write konnectivity agent manifest: %v", err)
 	}
 	k.previousConfig = cfg
+	k.Emit("wrote konnectivity agent new manifest")
 	return nil
 }
 
@@ -327,9 +409,9 @@ spec:
       priorityClassName: system-cluster-critical
       tolerations:
         - operator: Exists
-      {{ if .TunneledNetworkingMode }}
+      {{- if .HostNetwork }}
       hostNetwork: true
-      {{ end }}
+      {{- end }}
       containers:
         - image: {{ .Image }}
           imagePullPolicy: {{ .PullPolicy }}
@@ -345,22 +427,23 @@ spec:
                 valueFrom:
                   fieldRef:
                     fieldPath: status.hostIP
-          args: [
-                  "--logtostderr=true",
-                  "--ca-cert=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
-                  # Since the konnectivity server runs with hostNetwork=true,
-                  # this is the IP address of the master machine.
-                  "--proxy-server-host={{ .APIAddress }}",
-                  "--proxy-server-port={{ .AgentPort }}",
-                  "--service-account-token-path=/var/run/secrets/tokens/konnectivity-agent-token",
-                  "--agent-identifiers=host=$(NODE_IP)",
-                  "--agent-id=$(NODE_IP)",
-                  {{ if .TunneledNetworkingMode }}
-                  # agent need to listen on the node ip to be on pair with the tunneled network reconciler
-                  "--bind-address=$(NODE_IP)",
-                  "--apiserver-port-mapping=6443:localhost:{{.KASPort}}"
-                  {{ end }} 
-                  ]
+          args:
+            - --logtostderr=true
+            - --ca-cert=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+            - --proxy-server-host={{ .ProxyServerHost }}
+            - --proxy-server-port={{ .ProxyServerPort }}
+            - --service-account-token-path=/var/run/secrets/tokens/konnectivity-agent-token
+            - --agent-identifiers=host=$(NODE_IP)
+            - --agent-id=$(NODE_IP)
+              {{- if .BindToNodeIP }}
+            - --bind-address=$(NODE_IP)
+              {{- end }}
+              {{- if .APIServerPortMapping }}
+            - --apiserver-port-mapping={{ .APIServerPortMapping }}
+              {{- end }}
+              {{- if .FeatureGates }}
+            - "--feature-gates={{ .FeatureGates }}"
+              {{- end }}
           volumeMounts:
             - mountPath: /var/run/secrets/tokens
               name: konnectivity-agent-token
@@ -379,6 +462,3 @@ spec:
                   path: konnectivity-agent-token
                   audience: system:konnectivity-server
 `
-
-// Healthy is a no-op check
-func (k *Konnectivity) Healthy() error { return nil }

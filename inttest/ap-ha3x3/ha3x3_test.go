@@ -15,8 +15,8 @@
 package ha3x3
 
 import (
-	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -51,7 +51,7 @@ func (s *ha3x3Suite) SetupSuite() {
 // TearDownSuite tears down the network created after footloose has finished.
 func (s *ha3x3Suite) TearDownSuite() {
 	s.FootlooseSuite.TearDownSuite()
-	s.Require().NoError(s.DestroyNetwork(network))
+	s.Require().NoError(s.MaybeDestroyNetwork(network))
 }
 
 // SetupTest prepares the controller and filesystem, getting it into a consistent
@@ -71,9 +71,9 @@ func (s *ha3x3Suite) SetupTest() {
 		client, err := s.ExtensionsClient(s.ControllerNode(0))
 		s.Require().NoError(err)
 
-		_, perr := apcomm.WaitForCRDByName(context.TODO(), client, "plans.autopilot.k0sproject.io", 2*time.Minute)
+		_, perr := apcomm.WaitForCRDByName(s.Context(), client, "plans.autopilot.k0sproject.io", 2*time.Minute)
 		s.Require().NoError(perr)
-		_, cerr := apcomm.WaitForCRDByName(context.TODO(), client, "controlnodes.autopilot.k0sproject.io", 2*time.Minute)
+		_, cerr := apcomm.WaitForCRDByName(s.Context(), client, "controlnodes.autopilot.k0sproject.io", 2*time.Minute)
 		s.Require().NoError(cerr)
 
 		// With the primary controller running, create the join token for subsequent controllers.
@@ -117,11 +117,10 @@ spec:
   timestamp: now
   commands:
     - k0supdate:
-        version: v0.0.0
-        forceupdate: true
+        version: ` + s.K0sUpdateVersion + `
         platforms:
           linux-amd64:
-            url: http://localhost/dist/k0s
+            url: http://localhost/dist/k0s-new
         targets:
           controllers:
             discovery:
@@ -146,22 +145,25 @@ spec:
 	s.T().Logf("kubectl apply output: '%s'", out)
 	s.Require().NoError(err)
 
+	ssh, err := s.SSH(s.WorkerNode(0))
+	s.Require().NoError(err)
+	defer ssh.Disconnect()
+	out, err = ssh.ExecWithOutput(s.Context(), "/var/lib/k0s/bin/iptables-save -V")
+	s.Require().NoError(err)
+	iptablesVersionParts := strings.Split(out, " ")
+	iptablesModeBeforeUpdate := iptablesVersionParts[len(iptablesVersionParts)-1]
+
 	client, err := s.AutopilotClient(s.ControllerNode(0))
-	s.NoError(err)
+	s.Require().NoError(err)
 	s.NotEmpty(client)
 
 	// The plan has enough information to perform a successful update of k0s, so wait for it.
-	plan, err := apcomm.WaitForPlanByName(context.TODO(), client, apconst.AutopilotName, 10*time.Minute, func(obj interface{}) bool {
-		if plan, ok := obj.(*apv1beta2.Plan); ok {
-			return plan.Status.State == appc.PlanCompleted
-		}
-
-		return false
+	plan, err := apcomm.WaitForPlanByName(s.Context(), client, apconst.AutopilotName, 10*time.Minute, func(plan *apv1beta2.Plan) bool {
+		return plan.Status.State == appc.PlanCompleted
 	})
+	s.Require().NoError(err)
 
 	// Ensure all state/status are completed
-
-	s.NoError(err)
 	s.Equal(appc.PlanCompleted, plan.Status.State)
 
 	s.Equal(1, len(plan.Status.Commands))
@@ -177,6 +179,16 @@ spec:
 			s.Equal(appc.SignalCompleted, node.State)
 		}
 	}
+
+	if version, err := s.GetK0sVersion(s.ControllerNode(0)); s.NoError(err) {
+		s.Equal(s.K0sUpdateVersion, version)
+	}
+
+	out, err = ssh.ExecWithOutput(s.Context(), "/var/lib/k0s/bin/iptables-save -V")
+	s.Require().NoError(err)
+	iptablesVersionParts = strings.Split(out, " ")
+	iptablesModeAfterUpdate := iptablesVersionParts[len(iptablesVersionParts)-1]
+	s.Equal(iptablesModeBeforeUpdate, iptablesModeAfterUpdate)
 }
 
 // TestHA3x3Suite sets up a suite using 3 controllers for quorum, and runs various

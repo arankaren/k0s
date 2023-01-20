@@ -2,6 +2,20 @@ include embedded-bins/Makefile.variables
 include inttest/Makefile.variables
 include hack/tools/Makefile.variables
 
+ifndef HOST_ARCH
+HOST_HARDWARE := $(shell uname -m)
+ifneq (, $(filter $(HOST_HARDWARE), aarch64 arm64 armv8l))
+  HOST_ARCH := arm64
+else ifneq (, $(filter $(HOST_HARDWARE), armv7l arm))
+  HOST_ARCH := arm
+else
+  ifeq (, $(filter $(HOST_HARDWARE), x86_64 amd64 x64))
+    $(warning unknown machine hardware name $(HOST_HARDWARE), assuming amd64)
+  endif
+  HOST_ARCH := amd64
+endif
+endif
+
 K0S_GO_BUILD_CACHE ?= build/cache
 
 GO_SRCS := $(shell find . -type f -name '*.go' -not -path './$(K0S_GO_BUILD_CACHE)/*' -not -path './inttest/*' -not -name '*_test.go' -not -name 'zz_generated*')
@@ -12,7 +26,7 @@ GO_DIRS := . ./cmd/... ./pkg/... ./internal/... ./static/... ./hack/...
 #   none	does not embed any binaries
 
 EMBEDDED_BINS_BUILDMODE ?= docker
-# k0s runs on linux even if its built on mac or windows
+# k0s runs on linux even if it's built on mac or windows
 TARGET_OS ?= linux
 BUILD_UID ?= $(shell id -u)
 BUILD_GID ?= $(shell id -g)
@@ -55,8 +69,8 @@ LD_FLAGS += -X github.com/containerd/containerd/version.Revision=$(shell ./embed
 endif
 LD_FLAGS += $(BUILD_GO_LDFLAGS_EXTRA)
 
-GOLANG_IMAGE ?= golang:$(go_version)-alpine3.16
-K0S_GO_BUILD_CACHE_VOLUME_PATH=$(shell realpath $(K0S_GO_BUILD_CACHE))
+GOLANG_IMAGE ?= $(golang_buildimage)
+K0S_GO_BUILD_CACHE_VOLUME_PATH=$(realpath $(K0S_GO_BUILD_CACHE))
 GO_ENV ?= docker run --rm \
 	-v '$(K0S_GO_BUILD_CACHE_VOLUME_PATH)':/run/k0s-build \
 	-v '$(CURDIR)':/go/src/github.com/k0sproject/k0s \
@@ -139,17 +153,19 @@ pkg/apis/%/.client-gen.stamp: .k0sbuild.docker-image.k0s hack/tools/boilerplate.
 	  --output-package=github.com/k0sproject/k0s/pkg/apis/$(gen_output_dir)/
 	touch -- '$@'
 
-codegen_targets += static/gen_manifests.go
-static/gen_manifests.go: .k0sbuild.docker-image.k0s hack/tools/Makefile.variables
-static/gen_manifests.go: $(shell find static/manifests -type f)
+codegen_targets += static/zz_generated_assets.go
+static_asset_dirs := static/manifests static/misc
+static/zz_generated_assets.go: .k0sbuild.docker-image.k0s hack/tools/Makefile.variables
+static/zz_generated_assets.go: $(shell find $(static_asset_dirs) -type f)
+	-rm -f -- '$@'
 	CGO_ENABLED=0 $(GO) install github.com/kevinburke/go-bindata/go-bindata@v$(go-bindata_version)
-	$(GO_ENV) go-bindata -o static/gen_manifests.go -pkg static -prefix static static/...
+	$(GO_ENV) go-bindata -o '$@' -pkg static -prefix static $(patsubst %,%/...,$(static_asset_dirs)) || rm -f -- '$@'
 
 codegen_targets += pkg/assets/zz_generated_offsets_$(TARGET_OS).go
 zz_os = $(patsubst pkg/assets/zz_generated_offsets_%.go,%,$@)
 print_empty_generated_offsets = printf "%s\n\n%s\n%s\n" \
 			"package assets" \
-			"var BinData = map[string]struct{ offset, size int64 }{}" \
+			"var BinData = map[string]struct{ offset, size, originalSize int64 }{}" \
 			"var BinDataSize int64"
 ifeq ($(EMBEDDED_BINS_BUILDMODE),none)
 pkg/assets/zz_generated_offsets_linux.go pkg/assets/zz_generated_offsets_windows.go:
@@ -159,7 +175,7 @@ else
 pkg/assets/zz_generated_offsets_linux.go: .bins.linux.stamp
 pkg/assets/zz_generated_offsets_windows.go: .bins.windows.stamp
 pkg/assets/zz_generated_offsets_linux.go pkg/assets/zz_generated_offsets_windows.go: .k0sbuild.docker-image.k0s go.sum
-	GOOS=${GOHOSTOS} $(GO) run hack/gen-bindata/main.go -o bindata_$(zz_os) -pkg assets \
+	GOOS=${GOHOSTOS} $(GO) run -tags=hack hack/gen-bindata/cmd/main.go -o bindata_$(zz_os) -pkg assets \
 	     -gofile pkg/assets/zz_generated_offsets_$(zz_os).go \
 	     -prefix embedded-bins/staging/$(zz_os)/ embedded-bins/staging/$(zz_os)/bin
 endif
@@ -191,17 +207,44 @@ codegen: $(codegen_targets)
 
 # bindata contains the parts of codegen which aren't version controlled.
 .PHONY: bindata
-bindata: static/gen_manifests.go pkg/assets/zz_generated_offsets_$(TARGET_OS).go
+bindata: static/zz_generated_assets.go pkg/assets/zz_generated_offsets_$(TARGET_OS).go
 
 .PHONY: lint
+lint: GOLANGCI_LINT_FLAGS ?=
 lint: .k0sbuild.docker-image.k0s go.sum codegen
 	CGO_ENABLED=0 $(GO) install github.com/golangci/golangci-lint/cmd/golangci-lint@v$(golangci-lint_version)
-	$(GO_ENV) golangci-lint run --verbose $(GO_DIRS)
+	$(GO_ENV) golangci-lint run --verbose $(GOLANGCI_LINT_FLAGS) $(GO_DIRS)
+
+airgap-images.txt: k0s .k0sbuild.docker-image.k0s 
+	$(GO_ENV) ./k0s airgap list-images --all > '$@' || { \
+	  code=$$? && \
+	  rm -f -- '$@' && \
+	  exit $$code ; \
+	}
+
+airgap-image-bundle-linux-amd64.tar: TARGET_PLATFORM := linux/amd64
+airgap-image-bundle-linux-arm64.tar: TARGET_PLATFORM := linux/arm64
+airgap-image-bundle-linux-arm.tar:   TARGET_PLATFORM := linux/arm/v7
+airgap-image-bundle-linux-amd64.tar \
+airgap-image-bundle-linux-arm64.tar \
+airgap-image-bundle-linux-arm.tar: .k0sbuild.image-bundler.stamp airgap-images.txt
+	docker run --rm -i --privileged \
+	  -e TARGET_PLATFORM='$(TARGET_PLATFORM)' \
+	  k0sbuild.image-bundler < airgap-images.txt > '$@' || { \
+	    code=$$? && rm -f -- '$@' && exit $$code ; \
+	  }
+
+.k0sbuild.image-bundler.stamp: hack/image-bundler/*
+	docker build \
+	  --build-arg ALPINE_VERSION=$(alpine_patch_version) \
+	  -t k0sbuild.image-bundler \
+	  hack/image-bundler
+	touch -- '$@'
 
 .PHONY: $(smoketests)
-check-airgap check-ap-airgap: image-bundle/bundle.tar
+check-airgap check-ap-airgap: airgap-image-bundle-linux-$(HOST_ARCH).tar
 $(smoketests): k0s
-	$(MAKE) -C inttest $@
+	$(MAKE) -C inttest K0S_IMAGES_BUNDLE='$(CURDIR)/airgap-image-bundle-linux-$(HOST_ARCH).tar' $@
 
 .PHONY: smoketests
 smoketests: $(smoketests)
@@ -209,11 +252,11 @@ smoketests: $(smoketests)
 .PHONY: check-unit
 check-unit: GO_TEST_RACE ?= -race
 check-unit: go.sum codegen
-	$(GO) test $(GO_TEST_RACE) -ldflags='$(LD_FLAGS)' `$(GO) list $(GO_DIRS)`
+	$(GO) test -tags=hack $(GO_TEST_RACE) -ldflags='$(LD_FLAGS)' `$(GO) list -tags=hack $(GO_DIRS)`
 
 .PHONY: check-image-validity
 check-image-validity: go.sum
-	$(GO) run hack/validate-images/main.go -architectures amd64,arm64,arm
+	$(GO) run -tags=hack hack/validate-images/main.go -architectures amd64,arm64,arm
 
 .PHONY: clean-gocache
 clean-gocache:
@@ -224,38 +267,29 @@ clean-docker-image:
 	-docker rmi k0sbuild.docker-image.k0s -f
 	-rm -f .k0sbuild.docker-image.k0s
 
+clean-airgap-image-bundles:
+	-docker rmi -f k0sbuild.image-bundler.k0s
+	-rm airgap-images.txt .k0sbuild.image-bundler.stamp
+	-rm airgap-image-bundle-linux-amd64.tar airgap-image-bundle-linux-arm64.tar airgap-image-bundle-linux-arm.tar
+
 .PHONY: clean
-clean: clean-gocache clean-docker-image
-	-rm -f pkg/assets/zz_generated_offsets_*.go k0s k0s.exe .bins.*stamp bindata* static/gen_manifests.go
+clean: clean-gocache clean-docker-image clean-airgap-image-bundles
+	-rm -f pkg/assets/zz_generated_offsets_*.go k0s k0s.exe .bins.*stamp bindata* static/zz_generated_assets.go
 	-rm -rf $(K0S_GO_BUILD_CACHE) 
 	-find pkg/apis -type f \( -name .client-gen.stamp -or -name .controller-gen.stamp \) -delete
 	-$(MAKE) -C docs clean
 	-$(MAKE) -C embedded-bins clean
-	-$(MAKE) -C image-bundle clean
 	-$(MAKE) -C inttest clean
-
-.PHONY: manifests
-manifests: .helmCRD .cfgCRD
-
-.PHONY: .helmCRD
-
-image-bundle/image.list: k0s
-	./k0s airgap list-images > image-bundle/image.list
-
-image-bundle/bundle.tar: image-bundle/image.list
-	$(MAKE) -C image-bundle bundle.tar
 
 .PHONY: docs
 docs:
 	$(MAKE) -C docs
 
-DOCS_DEV_PORT = 8000
-
 .PHONY: docs-serve-dev
+docs-serve-dev: DOCS_DEV_PORT ?= 8000
 docs-serve-dev:
 	$(MAKE) -C docs .docker-image.serve-dev.stamp
 	docker run --rm \
-	  -v "$(CURDIR):/docs:ro" \
-	  -w /docs \
+	  -v "$(CURDIR):/k0s:ro" \
 	  -p '$(DOCS_DEV_PORT):8000' \
 	  k0sdocs.docker-image.serve-dev

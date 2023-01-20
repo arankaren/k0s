@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package v1beta1
 
 import (
@@ -52,6 +53,15 @@ metadata:
 	addr, err := iface.FirstPublicAddress()
 	assert.NoError(t, err)
 	assert.Equal(t, addr, c.Spec.Storage.Etcd.PeerAddress)
+}
+
+func TestEmptyClusterSpec(t *testing.T) {
+	underTest := ClusterConfig{
+		Spec: &ClusterSpec{},
+	}
+
+	errs := underTest.Validate()
+	assert.Nil(t, errs)
 }
 
 func TestEtcdDefaults(t *testing.T) {
@@ -127,8 +137,9 @@ spec:
 	c, err := ConfigFromString(yamlData)
 	assert.NoError(t, err)
 	errors := c.Validate()
-	assert.Equal(t, 1, len(errors))
-	assert.Equal(t, "unsupported network provider: invalidProvider", errors[0].Error())
+	if assert.Len(t, errors, 1) {
+		assert.ErrorContains(t, errors[0], `spec: network: provider: Unsupported value: "invalidProvider": supported values: "kuberouter", "calico", "custom"`)
+	}
 }
 
 func TestApiExternalAddress(t *testing.T) {
@@ -164,6 +175,40 @@ spec:
 	assert.NoError(t, err)
 	assert.Equal(t, "https://1.2.3.4:6443", c.Spec.API.APIAddressURL())
 	assert.Equal(t, "https://1.2.3.4:9443", c.Spec.API.K0sControlPlaneAPIAddress())
+}
+
+func TestNullValues(t *testing.T) {
+	yamlData := `
+apiVersion: k0s.k0sproject.io/v1beta1
+kind: ClusterConfig
+metadata:
+  name: foobar
+spec:
+  images: null
+  storage: null
+  network: null
+  api: null
+  extensions: null
+  controllerManager: null
+  scheduler: null
+  installConfig: null
+  telemetry: null
+  konnectivity: null
+`
+
+	c, err := ConfigFromString(yamlData)
+	assert.NoError(t, err)
+	assert.Equal(t, DefaultClusterImages(), c.Spec.Images)
+	assert.Equal(t, DefaultStorageSpec(), c.Spec.Storage)
+	assert.Equal(t, DefaultNetwork(), c.Spec.Network)
+	assert.Equal(t, DefaultAPISpec(), c.Spec.API)
+	assert.Equal(t, DefaultExtensions(), c.Spec.Extensions)
+	assert.Equal(t, DefaultStorageSpec(), c.Spec.Storage)
+	assert.Equal(t, DefaultControllerManagerSpec(), c.Spec.ControllerManager)
+	assert.Equal(t, DefaultSchedulerSpec(), c.Spec.Scheduler)
+	assert.Equal(t, DefaultInstallSpec(), c.Spec.Install)
+	assert.Equal(t, DefaultClusterTelemetry(), c.Spec.Telemetry)
+	assert.Equal(t, DefaultKonnectivitySpec(), c.Spec.Konnectivity)
 }
 
 func TestWorkerProfileConfig(t *testing.T) {
@@ -216,5 +261,4 @@ func TestStripDefaults(t *testing.T) {
 	a.Nil(stripped.Spec.ControllerManager)
 	a.Nil(stripped.Spec.Scheduler)
 	a.Nil(stripped.Spec.Network)
-	a.Nil(stripped.Spec.PodSecurityPolicy)
 }

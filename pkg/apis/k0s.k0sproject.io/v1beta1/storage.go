@@ -13,14 +13,16 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package v1beta1
 
 import (
 	"encoding/json"
 	"fmt"
-	"k8s.io/utils/strings/slices"
 	"path/filepath"
 	"strings"
+
+	"k8s.io/utils/strings/slices"
 
 	"github.com/sirupsen/logrus"
 
@@ -100,6 +102,10 @@ func (s *StorageSpec) UnmarshalJSON(data []byte) error {
 
 // Validate validates storage specs correctness
 func (s *StorageSpec) Validate() []error {
+	if s == nil {
+		return nil
+	}
+
 	var errors []error
 
 	if s.Etcd != nil && s.Etcd.ExternalCluster != nil {
@@ -117,6 +123,9 @@ type EtcdConfig struct {
 
 	// Node address used for etcd cluster peering
 	PeerAddress string `json:"peerAddress"`
+
+	// Map of key-values (strings) for any extra arguments you want to pass down to the etcd process
+	ExtraArgs map[string]string `json:"extraArgs,omitempty"`
 }
 
 // ExternalCluster defines external etcd cluster related config options
@@ -147,13 +156,14 @@ func DefaultEtcdConfig() *EtcdConfig {
 	return &EtcdConfig{
 		ExternalCluster: nil,
 		PeerAddress:     addr,
+		ExtraArgs:       make(map[string]string),
 	}
 }
 
 // DefaultKineConfig creates KineConfig with sane defaults
 func DefaultKineConfig(dataDir string) *KineConfig {
 	return &KineConfig{
-		DataSource: "sqlite://" + dataDir + "/db/state.db?more=rwc&_journal=WAL&cache=shared",
+		DataSource: "sqlite://" + dataDir + "/db/state.db?mode=rwc&_journal=WAL&cache=shared",
 	}
 }
 

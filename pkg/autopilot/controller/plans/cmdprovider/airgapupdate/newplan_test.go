@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/k0sproject/k0s/internal/testutil"
 	aptcomm "github.com/k0sproject/k0s/inttest/autopilot/common"
 	apv1beta2 "github.com/k0sproject/k0s/pkg/apis/autopilot.k0sproject.io/v1beta2"
 	apscheme "github.com/k0sproject/k0s/pkg/apis/autopilot.k0sproject.io/v1beta2/clientset/scheme"
@@ -28,6 +29,7 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -43,8 +45,6 @@ func TestNewPlan(t *testing.T) {
 		objects                   []crcli.Object
 		command                   apv1beta2.PlanCommand
 		expectedNextState         apv1beta2.PlanStateType
-		expectedRetry             bool
-		expectedError             bool
 		expectedPlanStatusWorkers []apv1beta2.PlanCommandTargetStatus
 		excludedFromPlans         []string
 	}{
@@ -83,8 +83,6 @@ func TestNewPlan(t *testing.T) {
 				},
 			},
 			appc.PlanSchedulableWait,
-			false,
-			false,
 			[]apv1beta2.PlanCommandTargetStatus{
 				apv1beta2.NewPlanCommandTargetStatus("worker0", appc.SignalPending),
 			},
@@ -126,8 +124,6 @@ func TestNewPlan(t *testing.T) {
 				},
 			},
 			appc.PlanIncompleteTargets,
-			false,
-			false,
 			[]apv1beta2.PlanCommandTargetStatus{
 				apv1beta2.NewPlanCommandTargetStatus("worker0", appc.SignalMissingNode),
 			},
@@ -182,8 +178,6 @@ func TestNewPlan(t *testing.T) {
 				},
 			},
 			appc.PlanIncompleteTargets,
-			false,
-			false,
 			[]apv1beta2.PlanCommandTargetStatus{
 				apv1beta2.NewPlanCommandTargetStatus("worker0", appc.SignalMissingPlatform),
 			},
@@ -225,8 +219,6 @@ func TestNewPlan(t *testing.T) {
 				},
 			},
 			appc.PlanRestricted,
-			false,
-			false,
 			[]apv1beta2.PlanCommandTargetStatus{
 				apv1beta2.NewPlanCommandTargetStatus("worker0", appc.SignalPending),
 			},
@@ -249,6 +241,7 @@ func TestNewPlan(t *testing.T) {
 				map[string]apdel.ControllerDelegate{
 					"worker": apdel.NodeControllerDelegate(),
 				},
+				testutil.NewFakeClientFactory(),
 				test.excludedFromPlans,
 			)
 
@@ -259,10 +252,12 @@ func TestNewPlan(t *testing.T) {
 			ctx := context.TODO()
 			nextState, retry, err := provider.NewPlan(ctx, test.command, &status)
 
+			require.NoError(t, err)
 			assert.Equal(t, test.expectedNextState, nextState)
-			assert.Equal(t, test.expectedRetry, retry)
-			assert.Equal(t, test.expectedError, err != nil, "Unexpected error: %v", err)
-			assert.True(t, cmp.Equal(test.expectedPlanStatusWorkers, status.AirgapUpdate.Workers, cmpopts.IgnoreFields(apv1beta2.PlanCommandTargetStatus{}, "LastUpdatedTimestamp")))
+			assert.False(t, retry)
+			if assert.NotNil(t, status.AirgapUpdate) {
+				assert.True(t, cmp.Equal(test.expectedPlanStatusWorkers, status.AirgapUpdate.Workers, cmpopts.IgnoreFields(apv1beta2.PlanCommandTargetStatus{}, "LastUpdatedTimestamp")))
+			}
 		})
 	}
 }

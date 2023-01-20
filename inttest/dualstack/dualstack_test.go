@@ -24,8 +24,9 @@ package dualstack
 // have proper values for spec.PodCIDRs
 
 import (
-	"context"
-	"errors"
+	"fmt"
+	"os"
+	"strings"
 
 	"github.com/stretchr/testify/suite"
 	v1meta "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -43,7 +44,7 @@ type DualstackSuite struct {
 }
 
 func (s *DualstackSuite) TestDualStackNodesHavePodCIDRs() {
-	nl, err := s.client.CoreV1().Nodes().List(context.Background(), v1meta.ListOptions{})
+	nl, err := s.client.CoreV1().Nodes().List(s.Context(), v1meta.ListOptions{})
 	s.Require().NoError(err)
 	for _, n := range nl.Items {
 		s.Require().Len(n.Spec.PodCIDRs, 2, "Each node must have ipv4 and ipv6 pod cidr")
@@ -51,54 +52,39 @@ func (s *DualstackSuite) TestDualStackNodesHavePodCIDRs() {
 }
 
 func (s *DualstackSuite) TestDualStackControlPlaneComponentsHaveServiceCIDRs() {
-	err := s.verifyKubeAPIServiceClusterIPRangeFlag(s.ControllerNode(0))
-	s.Require().NoError(err)
-	err = s.verifyKubeControllerManagerServiceClusterIPRangeFlag(s.ControllerNode(0))
-	s.Require().NoError(err)
+	const expected = "--service-cluster-ip-range=10.96.0.0/12,fd01::/108"
+	node := s.ControllerNode(0)
+
+	s.Contains(s.cmdlineForExecutable(node, "kube-apiserver"), expected)
+	s.Contains(s.cmdlineForExecutable(node, "kube-controller-manager"), expected)
 }
 
-// Verifies that kube-apiserver process has a dual-stack service-cluster-ip-range configured.
-func (s *DualstackSuite) verifyKubeAPIServiceClusterIPRangeFlag(node string) error {
+func (s *DualstackSuite) cmdlineForExecutable(node, binary string) []string {
+	require := s.Require()
 	ssh, err := s.SSH(node)
-	if err != nil {
-		return err
-	}
+	require.NoError(err)
 	defer ssh.Disconnect()
 
-	output, err := ssh.ExecWithOutput(`grep -e '--service-cluster-ip-range=10.96.0.0/12,fd01::/108' /proc/$(pidof kube-apiserver)/cmdline`)
-	if err != nil {
-		return err
-	}
-	if output != "--service-cluster-ip-range=10.96.0.0/12,fd01::/108" {
-		return errors.New("kube-apiserver does not have proper a dual-stack service-cluster-ip-range set")
-	}
+	output, err := ssh.ExecWithOutput(s.Context(), fmt.Sprintf("pidof -- %q", binary))
+	require.NoError(err)
 
-	return nil
-}
+	pids := strings.Split(output, " ")
+	require.Len(pids, 1, "Expected a single pid")
 
-// Verifies that kube-controller-manager process has a dual-stack service-cluster-ip-range configured.
-func (s *DualstackSuite) verifyKubeControllerManagerServiceClusterIPRangeFlag(node string) error {
-	ssh, err := s.SSH(node)
-	if err != nil {
-		return err
-	}
-	defer ssh.Disconnect()
-
-	output, err := ssh.ExecWithOutput(`grep -e '--service-cluster-ip-range=10.96.0.0/12,fd01::/108' /proc/$(pidof kube-controller-manager)/cmdline`)
-	if err != nil {
-		return err
-	}
-	if output != "--service-cluster-ip-range=10.96.0.0/12,fd01::/108" {
-		return errors.New("kube-controller-manager does not have proper a dual-stack service-cluster-ip-range set")
-	}
-
-	return nil
+	output, err = ssh.ExecWithOutput(s.Context(), fmt.Sprintf("cat /proc/%q/cmdline", pids[0]))
+	require.NoError(err, "Failed to get cmdline for PID %s", pids[0])
+	return strings.Split(output, "\x00")
 }
 
 func (s *DualstackSuite) SetupSuite() {
 	s.FootlooseSuite.SetupSuite()
 	s.PutFile(s.ControllerNode(0), "/tmp/k0s.yaml", k0sConfigWithDualStack)
-	s.Require().NoError(s.InitController(0, "--config=/tmp/k0s.yaml"))
+	controllerArgs := []string{"--config=/tmp/k0s.yaml"}
+	if os.Getenv("K0S_ENABLE_DYNAMIC_CONFIG") == "true" {
+		s.T().Log("Enabling dynamic config for controller")
+		controllerArgs = append(controllerArgs, "--enable-dynamic-config")
+	}
+	s.Require().NoError(s.InitController(0, controllerArgs...))
 	s.Require().NoError(s.RunWorkers())
 	client, err := s.KubeClient(s.ControllerNode(0))
 	s.Require().NoError(err)
@@ -109,7 +95,6 @@ func (s *DualstackSuite) SetupSuite() {
 	s.Require().NoError(err)
 
 	s.client = client
-
 }
 
 func TestDualStack(t *testing.T) {

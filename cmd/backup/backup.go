@@ -21,36 +21,37 @@ package backup
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
-	"github.com/sirupsen/logrus"
-	"github.com/spf13/cobra"
-
 	"github.com/k0sproject/k0s/internal/pkg/dir"
 	"github.com/k0sproject/k0s/pkg/backup"
+	"github.com/k0sproject/k0s/pkg/component/status"
 	"github.com/k0sproject/k0s/pkg/config"
-	"github.com/k0sproject/k0s/pkg/install"
+
+	"github.com/sirupsen/logrus"
+	"github.com/spf13/cobra"
 )
 
-type CmdOpts config.CLIOptions
-
-var savePath string
+type command config.CLIOptions
 
 func NewBackupCmd() *cobra.Command {
+	var savePath string
+
 	cmd := &cobra.Command{
 		Use:   "backup",
 		Short: "Back-Up k0s configuration. Must be run as root (or with sudo)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c := CmdOpts(config.GetCmdOpts())
+			c := command(config.GetCmdOpts())
 			if c.NodeConfig.Spec.Storage.Etcd.IsExternalClusterUsed() {
 				return fmt.Errorf("command 'k0s backup' does not support external etcd cluster")
 			}
-			return c.backup()
+			return c.backup(savePath, cmd.OutOrStdout())
 		},
-		PreRunE: func(c *cobra.Command, args []string) error {
-			cmdOpts := CmdOpts(config.GetCmdOpts())
-			return config.PreRunValidateConfig(cmdOpts.K0sVars)
+		PreRunE: func(cmd *cobra.Command, args []string) error {
+			c := command(config.GetCmdOpts())
+			return config.PreRunValidateConfig(c.K0sVars)
 		},
 	}
 	cmd.Flags().StringVar(&savePath, "save-path", "", "destination directory path for backup assets, use '-' for stdout")
@@ -59,7 +60,7 @@ func NewBackupCmd() *cobra.Command {
 	return cmd
 }
 
-func (c *CmdOpts) backup() error {
+func (c *command) backup(savePath string, out io.Writer) error {
 	if os.Geteuid() != 0 {
 		logrus.Fatal("this command must be run as root!")
 	}
@@ -72,7 +73,7 @@ func (c *CmdOpts) backup() error {
 		return fmt.Errorf("cannot find data-dir (%v). check your environment and/or command input and try again", c.K0sVars.DataDir)
 	}
 
-	status, err := install.GetStatusInfo(config.StatusSocket)
+	status, err := status.GetStatusInfo(config.StatusSocket)
 	if err != nil {
 		return fmt.Errorf("unable to detect cluster status %s", err)
 	}
@@ -83,7 +84,7 @@ func (c *CmdOpts) backup() error {
 		if err != nil {
 			return err
 		}
-		return mgr.RunBackup(c.NodeConfig.Spec, c.K0sVars, savePath)
+		return mgr.RunBackup(c.NodeConfig.Spec, c.K0sVars, savePath, out)
 	}
 	return fmt.Errorf("backup command must be run on the controller node, have `%s`", status.Role)
 }

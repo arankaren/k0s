@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package telemetry
 
 import (
@@ -20,7 +21,7 @@ import (
 	"time"
 
 	"github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
-	"github.com/k0sproject/k0s/pkg/component"
+	"github.com/k0sproject/k0s/pkg/component/manager"
 
 	"github.com/k0sproject/k0s/pkg/constant"
 	kubeutil "github.com/k0sproject/k0s/pkg/kubernetes"
@@ -43,8 +44,8 @@ type Component struct {
 	stopCh chan struct{}
 }
 
-var _ component.Component = (*Component)(nil)
-var _ component.ReconcilerComponent = (*Component)(nil)
+var _ manager.Component = (*Component)(nil)
+var _ manager.Reconciler = (*Component)(nil)
 
 var interval = time.Minute * 10
 
@@ -73,7 +74,7 @@ func (c *Component) retrieveKubeClient(ch chan struct{}) {
 }
 
 // Run runs work cycle
-func (c *Component) Run(_ context.Context) error {
+func (c *Component) Start(_ context.Context) error {
 	return nil
 }
 
@@ -112,11 +113,6 @@ func (c *Component) Reconcile(ctx context.Context, clusterCfg *v1beta1.ClusterCo
 		c.retrieveKubeClient(initedCh)
 	}, time.Second, initedCh)
 	go c.run(ctx)
-	return nil
-}
-
-// Healthy checks health
-func (c *Component) Healthy() error {
 	return nil
 }
 

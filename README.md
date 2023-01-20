@@ -13,6 +13,14 @@
 ![k0s-logo-dark](docs/img/k0s-logo-full-color-dark.svg#gh-dark-mode-only)
 ![k0s-logo-light](docs/img/k0s-logo-full-color-light.svg#gh-light-mode-only)
 
+## What happened to Github stargazers?
+
+In September 2022 we made a human error while creating some build automation scripts&tools for the repo. Our automation accidentally changed the repo to a private one for few minutes. That itself is not a big deal and everything was restored quickly. But the nasty side effect is that it also removed all the stargazers at that point. :(
+
+Before that mishap we had 4776 stargazers, making k0s one of the most popular Kubernetes distro out there.
+
+**So if you are reading this, and have not yet starred this repo we would highly appreciate the :star: to get our numbers closer to what they used to be.
+
 ## The Repository
 
 This repository ("k0s") is where Team Lens develops the [k0s](https://k8slens.dev/kubernetes) product together with the community. It is backed by a number of Kubernetes and cloud native ecosystem pioneers. This source code is available to everyone under the [Apache License 2.0](./LICENSE).
@@ -52,7 +60,7 @@ If you'd like to try k0s, please jump in to our:
 ## Join the Community
 
 - [Community Slack](https://join.slack.com/t/k8slens/shared_invite/zt-wcl8jq3k-68R5Wcmk1o95MLBE5igUDQ) - Request for support and help from the k0s community via Slack (shared Slack channel with Lens).
-- [Github Issues](https://github.com/k0sproject/k0s/issues) - Submit your issues and feature requests via Github.
+- [GitHub Issues](https://github.com/k0sproject/k0s/issues) - Submit your issues and feature requests via GitHub.
 
 We welcome your help in building k0s! If you are interested, we invite you to check out the [Contributing Guide](https://docs.k0sproject.io/latest/contributors/overview/) and the [Code of Conduct](https://docs.k0sproject.io/latest/contributors/CODE_OF_CONDUCT/).
 
@@ -85,18 +93,36 @@ With strong enough arguments we might take in new addons, but in general those s
 
 ## Build
 
-`k0s` can be built in two different ways:
+The requirements for building k0s from source are as follows:
 
-Build Kubernetes components from source as static binaries (requires docker):
+- GNU Make (v3.81 or newer)
+- coreutils
+- findutils
+- Docker
+
+All of the compilation steps are performed inside Docker containers, no
+installation of Go is required.
+
+The k0s binary can be built in two different ways:
+
+The "k0s" way, self-contained, all binaries compiled from source, statically
+linked and embedded:
 
 ```shell
-make EMBEDDED_BINS_BUILDMODE=docker
+make
 ```
 
-Build k0s without any embedded binaries (requires that Kubernetes binaries are pre-installed on the runtime system):
+The "package maintainer" way, without any embedded binaries (requires that the
+required binaries are provided separately at runtime):
 
 ```shell
 make EMBEDDED_BINS_BUILDMODE=none
+```
+
+The embedded binaries can be built on their own:
+
+```shell
+make -C embedded-bins
 ```
 
 Builds can be done in parallel:
@@ -107,7 +133,12 @@ make -j$(nproc)
 
 ## Smoke test
 
-To run a smoke test after build:
+Additionally to the requirements for building k0s, the smoke tests _do_ require
+a local Go installation. you can run `./vars.sh go_version` in a terminal to
+find out the version that's being used to build k0s. It will print the
+corresponding Go version to stdout.
+
+To run a basic smoke test after build:
 
 ```shell
 make check-basic

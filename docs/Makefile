@@ -1,3 +1,4 @@
+include ../embedded-bins/Makefile.variables
 include Makefile.variables
 
 ifeq ($(OS),Windows_NT)
@@ -22,7 +23,7 @@ docs: .require-mkdocs cli
 .PHONY: .require-mkdocs
 .require-mkdocs:
 	@which mkdocs >/dev/null 2>/dev/null || { \
-	  echo 'mkdocs required, use pip install mkdocs' >&2; \
+	  echo 'mkdocs required, use pip install --disable-pip-version-check -r $(CURDIR)/requirements.txt' >&2; \
 	  exit 1; \
 	}
 
@@ -73,9 +74,9 @@ cli:
 	sed $(sedopt) '/\[k0s kubectl /d' cli/k0s_kubectl.md
 	ln -s k0s.md cli/README.md
 
-.docker-image.serve-dev.stamp: Dockerfile.serve-dev requirements.txt
+.docker-image.serve-dev.stamp: Dockerfile.serve-dev requirements_pip.txt requirements.txt Makefile.variables
 	docker build \
-	  --build-arg PYTHON_IMAGE_VERSION=$(python_version)-alpine3.16 \
+	  --build-arg PYTHON_IMAGE_VERSION=$(python_version)-alpine$(alpine_version) \
 	  -t 'k0sdocs$(basename $@)' -f '$<' .
 	touch -- '$@'
 
@@ -91,3 +92,12 @@ clean: clean-k0s
 	    docker rmi -f "k0sdocs$$(basename "$$i" .stamp)" && rm -- "$$i";\
 	  fi; \
 	done
+
+.PHONY: update-pip-requirements
+update-pip-requirements: .docker-image.serve-dev.stamp
+	docker run --rm --entrypoint sh k0sdocs.docker-image.serve-dev -c \
+	'pip install --disable-pip-version-check pip-tools > /dev/null \
+	  && echo pip | pip-compile --allow-unsafe --generate-hashes --output-file - - | grep -E -v "^ *#" \
+	  && echo wheel | pip-compile --allow-unsafe --generate-hashes --output-file - - | grep -E -v "^ *#"' \
+	  > requirements_pip.txt.tmp
+	mv -- requirements_pip.txt.tmp requirements_pip.txt

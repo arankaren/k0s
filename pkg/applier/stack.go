@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package applier
 
 import (
@@ -24,8 +25,8 @@ import (
 	"time"
 
 	jsonpatch "github.com/evanphx/json-patch"
-	"github.com/k0sproject/k0s/internal/pkg/stringslice"
 	"github.com/sirupsen/logrus"
+	"golang.org/x/exp/slices"
 	apiErrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -35,17 +36,6 @@ import (
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/restmapper"
-)
-
-const (
-	// NameLabel stack label
-	NameLabel = "k0s.k0sproject.io/stack"
-
-	// ChecksumAnnotation defines the annotation key to used for stack checksums
-	ChecksumAnnotation = "k0s.k0sproject.io/stack-checksum"
-
-	// LastConfigAnnotation defines the annotation to be used for last applied configs
-	LastConfigAnnotation = "k0s.k0sproject.io/last-applied-configuration"
 )
 
 // Stack is a k8s resource bundle
@@ -200,10 +190,10 @@ func (s *Stack) findPruneableResources(ctx context.Context, mapper *restmapper.D
 	for _, apiResourceList := range apiResourceLists {
 		for _, apiResource := range apiResourceList.APIResources {
 			key := fmt.Sprintf("%s:%s", apiResourceList.GroupVersion, apiResource.Kind)
-			if !stringslice.Contains(apiResource.Verbs, "delete") {
+			if !slices.Contains(apiResource.Verbs, "delete") {
 				continue
 			}
-			if stringslice.Contains(ignoredResources, key) {
+			if slices.Contains(ignoredResources, key) {
 				s.log.Debugf("skipping resource %s from prune", key)
 				continue
 			}

@@ -13,18 +13,17 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package etcd
 
 import (
 	"fmt"
 
-	"github.com/spf13/cobra"
-
 	"github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
 	"github.com/k0sproject/k0s/pkg/config"
-)
 
-type CmdOpts config.CLIOptions
+	"github.com/spf13/cobra"
+)
 
 func NewEtcdCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -35,11 +34,11 @@ func NewEtcdCmd() *cobra.Command {
 				return err
 			}
 
-			c := CmdOpts(config.GetCmdOpts())
-			if c.ClusterConfig.Spec.Storage.Type != v1beta1.EtcdStorageType {
-				return fmt.Errorf("wrong storage type: %s", c.ClusterConfig.Spec.Storage.Type)
+			c := config.GetCmdOpts()
+			if c.NodeConfig.Spec.Storage.Type != v1beta1.EtcdStorageType {
+				return fmt.Errorf("wrong storage type: %s", c.NodeConfig.Spec.Storage.Type)
 			}
-			if c.ClusterConfig.Spec.Storage.Etcd.IsExternalClusterUsed() {
+			if c.NodeConfig.Spec.Storage.Etcd.IsExternalClusterUsed() {
 				return fmt.Errorf("command 'k0s etcd' does not support external etcd cluster")
 			}
 			return nil

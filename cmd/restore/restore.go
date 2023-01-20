@@ -21,6 +21,7 @@ package restore
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -29,28 +30,31 @@ import (
 	"github.com/k0sproject/k0s/internal/pkg/dir"
 	"github.com/k0sproject/k0s/internal/pkg/file"
 	"github.com/k0sproject/k0s/pkg/backup"
+	"github.com/k0sproject/k0s/pkg/component/status"
 	"github.com/k0sproject/k0s/pkg/config"
 	"github.com/k0sproject/k0s/pkg/constant"
-	"github.com/k0sproject/k0s/pkg/install"
 
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
 
-type CmdOpts config.CLIOptions
-
-var restoredConfigPath string
+type command struct {
+	config.CLIOptions
+	restoredConfigPath string
+}
 
 func NewRestoreCmd() *cobra.Command {
+	var c command
+
 	cmd := &cobra.Command{
 		Use:   "restore filename",
 		Short: "restore k0s state from given backup archive. Use '-' as filename to read from stdin. Must be run as root (or with sudo)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c := CmdOpts(config.GetCmdOpts())
+			c.CLIOptions = config.GetCmdOpts()
 			if len(args) != 1 {
 				return fmt.Errorf("path to backup archive expected")
 			}
-			return c.restore(args[0])
+			return c.restore(args[0], cmd.OutOrStdout())
 		},
 	}
 
@@ -62,17 +66,17 @@ func NewRestoreCmd() *cobra.Command {
 	}
 
 	restoredConfigPathDescription := fmt.Sprintf("Specify desired name and full path for the restored k0s.yaml file (default: %s/k0s_<archive timestamp>.yaml", cwd)
-	cmd.Flags().StringVar(&restoredConfigPath, "config-out", "", restoredConfigPathDescription)
+	cmd.Flags().StringVar(&c.restoredConfigPath, "config-out", "", restoredConfigPathDescription)
 	cmd.PersistentFlags().AddFlagSet(config.GetPersistentFlagSet())
 	return cmd
 }
 
-func (c *CmdOpts) restore(path string) error {
+func (c *command) restore(path string, out io.Writer) error {
 	if os.Geteuid() != 0 {
 		return fmt.Errorf("this command must be run as root")
 	}
 
-	k0sStatus, _ := install.GetStatusInfo(config.StatusSocket)
+	k0sStatus, _ := status.GetStatusInfo(config.StatusSocket)
 	if k0sStatus != nil && k0sStatus.Pid != 0 {
 		logrus.Fatal("k0s seems to be running! k0s must be down during the restore operation.")
 	}
@@ -91,10 +95,10 @@ func (c *CmdOpts) restore(path string) error {
 	if err != nil {
 		return err
 	}
-	if restoredConfigPath == "" {
-		restoredConfigPath = defaultConfigFileOutputPath(path)
+	if c.restoredConfigPath == "" {
+		c.restoredConfigPath = defaultConfigFileOutputPath(path)
 	}
-	return mgr.RunRestore(path, c.K0sVars, restoredConfigPath)
+	return mgr.RunRestore(path, c.K0sVars, c.restoredConfigPath, out)
 }
 
 // set output config file name and path according to input archive Timestamps

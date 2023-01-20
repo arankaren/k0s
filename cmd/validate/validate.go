@@ -13,15 +13,14 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package validate
 
 import (
 	configcmd "github.com/k0sproject/k0s/cmd/config"
-	"github.com/k0sproject/k0s/pkg/config"
+
 	"github.com/spf13/cobra"
 )
-
-type CmdOpts config.CLIOptions
 
 // TODO deprecated, remove when appropriate
 func NewValidateCmd() *cobra.Command {

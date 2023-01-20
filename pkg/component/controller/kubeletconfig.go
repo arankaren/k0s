@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package controller
 
 import (
@@ -21,12 +22,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"path"
 	"path/filepath"
 	"reflect"
 
 	"github.com/imdario/mergo"
+	"github.com/k0sproject/k0s/pkg/component/manager"
 	k8sutil "github.com/k0sproject/k0s/pkg/kubernetes"
 	"github.com/sirupsen/logrus"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -34,15 +35,15 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/k0sproject/k0s/internal/pkg/dir"
+	"github.com/k0sproject/k0s/internal/pkg/file"
 	"github.com/k0sproject/k0s/internal/pkg/templatewriter"
 	"github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
-	"github.com/k0sproject/k0s/pkg/component"
 	"github.com/k0sproject/k0s/pkg/constant"
 )
 
 // Dummy checks so we catch easily if we miss some interface implementation
-var _ component.ReconcilerComponent = (*KubeletConfig)(nil)
-var _ component.Component = (*KubeletConfig)(nil)
+var _ manager.Reconciler = (*KubeletConfig)(nil)
+var _ manager.Component = (*KubeletConfig)(nil)
 
 // KubeletConfig is the reconciler for generic kubelet configs
 type KubeletConfig struct {
@@ -74,7 +75,7 @@ func (k *KubeletConfig) Stop() error {
 }
 
 // Run dumps the needed manifest objects
-func (k *KubeletConfig) Run(_ context.Context) error {
+func (k *KubeletConfig) Start(_ context.Context) error {
 
 	return nil
 }
@@ -126,10 +127,10 @@ func (k *KubeletConfig) createProfiles(clusterSpec *v1beta1.ClusterConfig) (*byt
 		return nil, fmt.Errorf("failed to get DNS address for kubelet config: %v", err)
 	}
 	manifest := bytes.NewBuffer([]byte{})
-	defaultProfile := getDefaultProfile(dnsAddress, clusterSpec.Spec.Network.DualStack.Enabled, clusterSpec.Spec.Network.ClusterDomain)
+	defaultProfile := getDefaultProfile(dnsAddress, clusterSpec.Spec.Network.ClusterDomain)
 	defaultProfile["cgroupsPerQOS"] = true
 
-	winDefaultProfile := getDefaultProfile(dnsAddress, clusterSpec.Spec.Network.DualStack.Enabled, clusterSpec.Spec.Network.ClusterDomain)
+	winDefaultProfile := getDefaultProfile(dnsAddress, clusterSpec.Spec.Network.ClusterDomain)
 	winDefaultProfile["cgroupsPerQOS"] = false
 
 	if err := k.writeConfigMapWithProfile(manifest, "default", defaultProfile); err != nil {
@@ -143,7 +144,7 @@ func (k *KubeletConfig) createProfiles(clusterSpec *v1beta1.ClusterConfig) (*byt
 		formatProfileName("default-windows"),
 	}
 	for _, profile := range clusterSpec.Spec.WorkerProfiles {
-		profileConfig := getDefaultProfile(dnsAddress, false, clusterSpec.Spec.Network.ClusterDomain) // Do not add dualstack feature gate to the custom profiles
+		profileConfig := getDefaultProfile(dnsAddress, clusterSpec.Spec.Network.ClusterDomain)
 
 		var workerValues unstructuredYamlObject
 		err := json.Unmarshal(profile.Config, &workerValues)
@@ -176,9 +177,18 @@ func (k *KubeletConfig) save(data []byte) error {
 	}
 
 	filePath := filepath.Join(kubeletDir, "kubelet-config.yaml")
-	if err := os.WriteFile(filePath, data, constant.CertMode); err != nil {
+	if err := file.WriteContentAtomically(filePath, data, constant.CertMode); err != nil {
 		return fmt.Errorf("can't write kubelet configuration config map: %v", err)
 	}
+
+	deprecationNotice := []byte(`The kubelet-config component has been replaced by the worker-config component in k0s 1.26.
+It is scheduled for removal in k0s 1.27.
+`)
+
+	if err := file.WriteContentAtomically(filepath.Join(kubeletDir, "deprecated.txt"), deprecationNotice, constant.CertMode); err != nil {
+		k.log.WithError(err).Warn("Failed to write deprecation notice")
+	}
+
 	return nil
 }
 
@@ -221,7 +231,7 @@ func (k *KubeletConfig) writeRbacRoleBindings(w io.Writer, configMapNames []stri
 	return tw.WriteToBuffer(w)
 }
 
-func getDefaultProfile(dnsAddress string, dualStack bool, clusterDomain string) unstructuredYamlObject {
+func getDefaultProfile(dnsAddress string, clusterDomain string) unstructuredYamlObject {
 	// the motivation to keep it like this instead of the yaml template:
 	// - it's easier to merge programatically defined structure
 	// - apart from map[string]interface there is no good way to define free-form mapping
@@ -247,11 +257,6 @@ func getDefaultProfile(dnsAddress string, dualStack bool, clusterDomain string) 
 		"serverTLSBootstrap": true,
 		"eventRecordQPS":     0,
 	}
-	if dualStack {
-		profile["featureGates"] = map[string]bool{
-			"IPv6DualStack": true,
-		}
-	}
 	return profile
 }
 
@@ -261,6 +266,12 @@ kind: ConfigMap
 metadata:
   name: {{.Name}}
   namespace: kube-system
+  labels:
+    k0s.k0sproject.io/deprecated-since: "1.26"
+  annotations:
+    k0s.k0sproject.io/deprecated: |
+      The kubelet-config component has been replaced by the worker-config component in k0s 1.26.
+      It is scheduled for removal in k0s 1.27.
 data:
   kubelet: |
 {{ .KubeletConfigYAML | nindent 4 }}
@@ -272,6 +283,12 @@ kind: Role
 metadata:
   name: system:bootstrappers:kubelet-configmaps
   namespace: kube-system
+  labels:
+    k0s.k0sproject.io/deprecated-since: "1.26"
+  annotations:
+    k0s.k0sproject.io/deprecated: |
+      The kubelet-config component has been replaced by the worker-config component in k0s 1.26.
+      It is scheduled for removal in k0s 1.27.
 rules:
 - apiGroups: [""]
   resources: ["configmaps"]
@@ -286,6 +303,12 @@ kind: RoleBinding
 metadata:
   name: system:bootstrappers:kubelet-configmaps
   namespace: kube-system
+  labels:
+    k0s.k0sproject.io/deprecated-since: "1.26"
+  annotations:
+    k0s.k0sproject.io/deprecated: |
+      The kubelet-config component has been replaced by the worker-config component in k0s 1.26.
+      It is scheduled for removal in k0s 1.27.
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -306,6 +329,3 @@ func mergeProfiles(a *unstructuredYamlObject, b unstructuredYamlObject) (unstruc
 	}
 	return *a, nil
 }
-
-// Health-check interface
-func (k *KubeletConfig) Healthy() error { return nil }

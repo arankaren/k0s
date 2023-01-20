@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package config
 
 import (
@@ -51,7 +52,13 @@ func (rules *ClientConfigLoadingRules) readRuntimeConfig() (clusterConfig *v1bet
 	if rules.RuntimeConfigPath == "" {
 		rules.RuntimeConfigPath = runtimeConfigPathDefault
 	}
-	return rules.ParseRuntimeConfig()
+
+	config, err := rules.ParseRuntimeConfig()
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse config from %q: %w", rules.RuntimeConfigPath, err)
+	}
+
+	return config, err
 }
 
 // generic function that reads a config file, and returns a ClusterConfig object
@@ -157,7 +164,7 @@ func (rules *ClientConfigLoadingRules) writeConfig(yamlData []byte, storageSpec 
 		return fmt.Errorf("failed to marshal config: %v", err)
 	}
 
-	err = os.WriteFile(rules.RuntimeConfigPath, data, 0755)
+	err = file.WriteContentAtomically(rules.RuntimeConfigPath, data, 0755)
 	if err != nil {
 		return fmt.Errorf("failed to write runtime config to %s (%v): %v", rules.K0sVars.RunDir, rules.RuntimeConfigPath, err)
 	}

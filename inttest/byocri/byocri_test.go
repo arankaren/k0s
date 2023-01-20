@@ -13,18 +13,18 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package byocri
 
 import (
-	"context"
 	"fmt"
 	"testing"
 
+	"github.com/avast/retry-go"
 	"github.com/stretchr/testify/suite"
 	"github.com/weaveworks/footloose/pkg/config"
 
 	"github.com/k0sproject/k0s/inttest/common"
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 type BYOCRISuite struct {
@@ -37,23 +37,15 @@ func (s *BYOCRISuite) TestK0sGetsUp() {
 	s.Require().NoError(s.runDockerWorker())
 
 	kc, err := s.KubeClient(s.ControllerNode(0))
-	s.NoError(err)
+	s.Require().NoError(err)
 
 	err = s.WaitForNodeReady(s.WorkerNode(0), kc)
 	s.NoError(err)
 
-	pods, err := kc.CoreV1().Pods("kube-system").List(context.TODO(), v1.ListOptions{
-		Limit: 100,
-	})
-	s.NoError(err)
-
-	podCount := len(pods.Items)
-
-	s.T().Logf("found %d pods in kube-system", podCount)
-	s.Greater(podCount, 0, "expecting to see few pods in kube-system namespace")
+	s.AssertSomeKubeSystemPods(kc)
 
 	s.T().Log("waiting to see CNI pods ready")
-	s.NoError(common.WaitForKubeRouterReady(kc), "CNI did not start")
+	s.NoError(common.WaitForKubeRouterReady(s.Context(), kc), "CNI did not start")
 }
 
 func (s *BYOCRISuite) runDockerWorker() error {
@@ -70,18 +62,29 @@ func (s *BYOCRISuite) runDockerWorker() error {
 	}
 	defer sshWorker.Disconnect()
 
-	_, err = sshWorker.ExecWithOutput("apk add docker && rc-service docker start")
+	_, err = sshWorker.ExecWithOutput(s.Context(), "apk add docker && rc-service docker start")
 	if err != nil {
 		return err
 	}
 	// We need to also start the cri-dockerd as the shim is no longer bundled with kubelet codebase
-	_, err = sshWorker.ExecWithOutput("rc-service cri-dockerd start")
+	_, err = sshWorker.ExecWithOutput(s.Context(), "rc-service cri-dockerd start")
 	if err != nil {
 		return err
 	}
 
+	s.T().Log("Waiting for cri-dockerd to start up")
+
+	s.Require().NoError(retry.Do(
+		func() error {
+			_, err = sshWorker.ExecWithOutput(s.Context(), "[ -e /var/run/cri-dockerd.sock ]")
+			return err
+		},
+		retry.LastErrorOnly(true),
+		retry.Context(s.Context()),
+	), "The socket file for cri-dockerd doesn't exist. Is it running?")
+
 	workerCommand := fmt.Sprintf(`nohup /usr/local/bin/k0s worker --debug --cri-socket remote:unix:///var/run/cri-dockerd.sock "%s" >/tmp/k0s-worker.log 2>&1 &`, token)
-	_, err = sshWorker.ExecWithOutput(workerCommand)
+	_, err = sshWorker.ExecWithOutput(s.Context(), workerCommand)
 	if err != nil {
 		return err
 	}

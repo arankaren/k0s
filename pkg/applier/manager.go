@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package applier
 
 import (
@@ -22,8 +23,8 @@ import (
 	"time"
 
 	"github.com/k0sproject/k0s/internal/pkg/dir"
-	"github.com/k0sproject/k0s/pkg/component"
-	"github.com/k0sproject/k0s/pkg/component/controller"
+	"github.com/k0sproject/k0s/pkg/component/controller/leaderelector"
+	"github.com/k0sproject/k0s/pkg/component/manager"
 	"github.com/k0sproject/k0s/pkg/constant"
 	kubeutil "github.com/k0sproject/k0s/pkg/kubernetes"
 
@@ -43,10 +44,10 @@ type Manager struct {
 	log           *logrus.Entry
 	stacks        map[string]stack
 
-	LeaderElector controller.LeaderElector
+	LeaderElector leaderelector.Interface
 }
 
-var _ component.Component = (*Manager)(nil)
+var _ manager.Component = (*Manager)(nil)
 
 type stack = struct {
 	context.CancelFunc
@@ -82,7 +83,7 @@ func (m *Manager) Init(ctx context.Context) error {
 }
 
 // Run runs the Manager
-func (m *Manager) Run(_ context.Context) error {
+func (m *Manager) Start(_ context.Context) error {
 	return nil
 }
 
@@ -198,6 +199,3 @@ func (m *Manager) removeStack(ctx context.Context, name string) {
 
 	log.Info("Stack deleted successfully")
 }
-
-// Health-check interface
-func (m *Manager) Healthy() error { return nil }

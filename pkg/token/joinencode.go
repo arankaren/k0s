@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package token
 
 import (
@@ -23,14 +24,14 @@ import (
 )
 
 // JoinEncode compresses and base64 encodes a join token
-func JoinEncode(inBuf *bytes.Buffer) (string, error) {
+func JoinEncode(in io.Reader) (string, error) {
 	var outBuf bytes.Buffer
 	gz, err := gzip.NewWriterLevel(&outBuf, gzip.BestCompression)
 	if err != nil {
 		return "", err
 	}
 
-	_, err = io.Copy(gz, inBuf)
+	_, err = io.Copy(gz, in)
 	gzErr := gz.Close()
 	if err != nil {
 		return "", err

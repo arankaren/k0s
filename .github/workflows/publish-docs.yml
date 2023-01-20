@@ -24,6 +24,8 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: docs/requirements.txt
 
       - name: Set up Go ${{ env.GO_VERSION }}
         uses: actions/setup-go@v3
@@ -32,9 +34,9 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r docs/requirements_release.txt
-          pip install git+https://${{ secrets.GH_TOKEN }}@github.com/lensapp/mkdocs-material-insiders.git
+          pip install --disable-pip-version-check -r docs/requirements_pip.txt
+          pip --version
+          pip install --disable-pip-version-check -r docs/requirements.txt
           go install github.com/k0sproject/version/cmd/k0s_sort@v0.2.2
 
       - name: Generate docs
@@ -65,32 +67,36 @@ jobs:
           mike deploy --push "$VERSION"
 
       - name: Update mike version aliases
+        if: github.repository == 'k0sproject/k0s'
         id: set_versions
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAGS=$(gh release list -L 1000 -R k0sproject/k0s | grep "+k0s." | grep -v Draft | cut -f 1 | k0s_sort)
+          TAGS=$(gh release list -L 1000 -R "$GITHUB_REPOSITORY" | grep "+k0s." | grep -v Draft | cut -f 1 | k0s_sort)
           LATEST=$(echo "${TAGS}" | tail -1)
           STABLE=$(echo "${TAGS}" | grep -v -- "-" | tail -1)
           mike alias -u head main
           mike alias -u "${STABLE}" stable
           mike set-default --push stable
-          echo ::set-output name=LATEST::${LATEST}
-          echo ::set-output name=STABLE::${STABLE}
+          echo LATEST="$LATEST" >> $GITHUB_OUTPUT
+          echo STABLE="$STABLE" >> $GITHUB_OUTPUT
 
       # Ensures the current branch is gh-pages,
       # Creates / updates the "stable" and "latest" plain text files with the corresponding versions
       # Commits if the files were changed
       # Finally pushes if there are unpushed commits
       - name: Create version files
+        if: github.repository == 'k0sproject/k0s'
         run: |
           LATEST=${{ steps.set_versions.outputs.LATEST }}
           STABLE=${{ steps.set_versions.outputs.STABLE }}
+          cp .github/workflows/channel.yaml.tpl /tmp/tpl
           git checkout gh-pages
           echo "${STABLE}" > stable.txt
           git add stable.txt && git update-index --refresh
           git diff-index --quiet HEAD -- || git commit -m "Set stable to ${STABLE}"
           echo "${LATEST}" > latest.txt
-          git add latest.txt && git update-index --refresh
+          cat /tmp/tpl | sed "s/{{ .Version }}/${LATEST}/g" > edge_release
+          git add latest.txt edge_release && git update-index --refresh
           git diff-index --quiet HEAD -- || git commit -m "Set latest to ${LATEST}"
           git push origin gh-pages

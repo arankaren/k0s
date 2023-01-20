@@ -13,10 +13,10 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package kine
 
 import (
-	"context"
 	"fmt"
 	"testing"
 
@@ -25,7 +25,6 @@ import (
 	"github.com/stretchr/testify/suite"
 
 	"github.com/k0sproject/k0s/inttest/common"
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 type KineSuite struct {
@@ -46,18 +45,10 @@ func (s *KineSuite) TestK0sGetsUp() {
 	err = s.WaitForNodeReady(s.WorkerNode(1), kc)
 	s.NoError(err)
 
-	pods, err := kc.CoreV1().Pods("kube-system").List(context.TODO(), v1.ListOptions{
-		Limit: 100,
-	})
-	s.NoError(err)
-
-	podCount := len(pods.Items)
-
-	s.T().Logf("found %d pods in kube-system", podCount)
-	s.Greater(podCount, 0, "expecting to see few pods in kube-system namespace")
+	s.AssertSomeKubeSystemPods(kc)
 
 	s.T().Log("waiting to see CNI pods ready")
-	s.NoError(common.WaitForKubeRouterReadyWithContext(s.Context(), kc), "CNI did not start")
+	s.NoError(common.WaitForKubeRouterReady(s.Context(), kc), "CNI did not start")
 
 	s.T().Run("verify", func(t *testing.T) {
 		ssh, err := s.SSH(s.ControllerNode(0))
@@ -65,18 +56,18 @@ func (s *KineSuite) TestK0sGetsUp() {
 		defer ssh.Disconnect()
 
 		t.Run(("kineIsUsedAsStorage"), func(t *testing.T) {
-			_, err = ssh.ExecWithOutput("test -e /var/lib/k0s/bin/kine && ps xa | grep kine")
+			_, err = ssh.ExecWithOutput(s.Context(), "test -e /var/lib/k0s/bin/kine && ps xa | grep kine")
 			assert.NoError(t, err)
 		})
 
 		t.Run(("noControllerJoinTokens"), func(t *testing.T) {
-			noToken, err := ssh.ExecWithOutput(fmt.Sprintf("'%s' token create --role=controller", s.K0sFullPath))
+			noToken, err := ssh.ExecWithOutput(s.Context(), fmt.Sprintf("'%s' token create --role=controller", s.K0sFullPath))
 			assert.Error(t, err)
 			assert.Equal(t, "Error: refusing to create token: cannot join controller into current storage", noToken)
 		})
 
 		t.Run(("workerJoinTokens"), func(t *testing.T) {
-			_, err := ssh.ExecWithOutput(fmt.Sprintf("'%s' token create --role=worker", s.K0sFullPath))
+			_, err := ssh.ExecWithOutput(s.Context(), fmt.Sprintf("'%s' token create --role=worker", s.K0sFullPath))
 			assert.NoError(t, err)
 		})
 	})

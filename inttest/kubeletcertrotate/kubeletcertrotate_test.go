@@ -15,7 +15,7 @@
 package kubeletcertrotate
 
 import (
-	"context"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -24,6 +24,7 @@ import (
 	apcomm "github.com/k0sproject/k0s/pkg/autopilot/common"
 	apconst "github.com/k0sproject/k0s/pkg/autopilot/constant"
 	appc "github.com/k0sproject/k0s/pkg/autopilot/controller/plans/core"
+	"github.com/k0sproject/k0s/pkg/component/status"
 
 	"github.com/k0sproject/k0s/inttest/common"
 
@@ -45,7 +46,11 @@ func (s *kubeletCertRotateSuite) SetupSuite() {
 // TearDownSuite tears down the network created after footloose has finished.
 func (s *kubeletCertRotateSuite) TearDownSuite() {
 	s.FootlooseSuite.TearDownSuite()
-	s.Require().NoError(s.DestroyNetwork(network))
+	s.Require().NoError(s.MaybeDestroyNetwork(network))
+}
+
+type statusJSON struct {
+	WorkerToAPIConnectionStatus status.ProbeStatus
 }
 
 // SetupTest prepares the controller and filesystem, getting it into a consistent
@@ -58,9 +63,9 @@ func (s *kubeletCertRotateSuite) SetupTest() {
 	extClient, err := s.ExtensionsClient(s.ControllerNode(0))
 	s.Require().NoError(err)
 
-	_, perr := apcomm.WaitForCRDByName(context.TODO(), extClient, "plans.autopilot.k0sproject.io", 2*time.Minute)
+	_, perr := apcomm.WaitForCRDByName(s.Context(), extClient, "plans.autopilot.k0sproject.io", 2*time.Minute)
 	s.Require().NoError(perr)
-	_, cerr := apcomm.WaitForCRDByName(context.TODO(), extClient, "controlnodes.autopilot.k0sproject.io", 2*time.Minute)
+	_, cerr := apcomm.WaitForCRDByName(s.Context(), extClient, "controlnodes.autopilot.k0sproject.io", 2*time.Minute)
 	s.Require().NoError(cerr)
 
 	// Create a worker join token
@@ -83,7 +88,12 @@ func (s *kubeletCertRotateSuite) SetupTest() {
 	workerSSH, err := s.SSH(s.WorkerNode(0))
 	s.Require().NoError(err)
 	s.T().Log("waiting to see kubelet rotating the client cert before triggering Plan creation")
-	workerSSH.ExecWithOutput("inotifywait --no-dereference /var/lib/k0s/kubelet/pki/kubelet-client-current.pem")
+	workerSSH.ExecWithOutput(s.Context(), "inotifywait --no-dereference /var/lib/k0s/kubelet/pki/kubelet-client-current.pem")
+	output, err := workerSSH.ExecWithOutput(s.Context(), "k0s status -ojson")
+	s.Require().NoError(err)
+	status := statusJSON{}
+	s.Require().NoError(json.Unmarshal([]byte(output), &status))
+	s.Require().True(status.WorkerToAPIConnectionStatus.Success)
 	s.TestApply()
 }
 
@@ -132,21 +142,17 @@ spec:
 	s.Require().NoError(err)
 
 	client, err := s.AutopilotClient(s.ControllerNode(0))
-	s.NoError(err)
+	s.Require().NoError(err)
 	s.NotEmpty(client)
 
 	// The plan has enough information to perform a successful update of k0s, so wait for it.
-	plan, err := apcomm.WaitForPlanByName(context.TODO(), client, apconst.AutopilotName, 10*time.Minute, func(obj interface{}) bool {
-		if plan, ok := obj.(*apv1beta2.Plan); ok {
-			return plan.Status.State == appc.PlanCompleted
-		}
-
-		return false
+	plan, err := apcomm.WaitForPlanByName(s.Context(), client, apconst.AutopilotName, 10*time.Minute, func(plan *apv1beta2.Plan) bool {
+		return plan.Status.State == appc.PlanCompleted
 	})
 
 	// Ensure all state/status are completed
 
-	s.NoError(err)
+	s.Require().NoError(err)
 	s.Equal(appc.PlanCompleted, plan.Status.State)
 
 	s.Equal(1, len(plan.Status.Commands))

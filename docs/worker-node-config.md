@@ -14,7 +14,7 @@ kubectl get node --show-labels
 
 ```shell
 NAME      STATUS     ROLES    AGE   VERSION        LABELS
-worker0   NotReady   <none>   10s   v1.23.6+k0s  beta.kubernetes.io/arch=amd64,beta.kubernetes.io/os=linux,k0sproject.io/foo=bar,k0sproject.io/other=xyz,kubernetes.io/arch=amd64,kubernetes.io/hostname=worker0,kubernetes.io/os=linux
+worker0   NotReady   <none>   10s   v1.26.0+k0s  beta.kubernetes.io/arch=amd64,beta.kubernetes.io/os=linux,k0sproject.io/foo=bar,k0sproject.io/other=xyz,kubernetes.io/arch=amd64,kubernetes.io/hostname=worker0,kubernetes.io/os=linux
 ```
 
 Controller worker nodes are assigned `node.k0sproject.io/role=control-plane` and `node-role.kubernetes.io/control-plane=true` labels:
@@ -25,7 +25,7 @@ kubectl get node --show-labels
 
 ```shell
 NAME          STATUS     ROLES           AGE   VERSION        LABELS
-controller0   NotReady   control-plane   10s   v1.23.6+k0s  beta.kubernetes.io/arch=amd64,beta.kubernetes.io/os=linux,kubernetes.io/hostname=worker0,kubernetes.io/os=linux,node.k0sproject.io/role=control-plane,node-role.kubernetes.io/control-plane=true
+controller0   NotReady   control-plane   10s   v1.26.0+k0s  beta.kubernetes.io/arch=amd64,beta.kubernetes.io/os=linux,kubernetes.io/hostname=worker0,kubernetes.io/os=linux,node.k0sproject.io/role=control-plane,node-role.kubernetes.io/control-plane=true
 ```
 
 **Note:** Setting the labels is only effective on the first registration of the node. Changing the labels thereafter has no effect.
@@ -46,14 +46,31 @@ controller0   [map[effect:NoSchedule key:node-role.kubernetes.io/master]]
 worker0       <none>
 ```
 
-## Kubelet args
+## Kubelet configuration
 
-The `k0s worker` command accepts a generic flag to pass in any set of arguments for kubelet process.
+The `k0s worker` command accepts a generic flag to pass in any set of arguments
+for kubelet process.
 
-For example, running `k0s worker --token-file=k0s.token --kubelet-extra-args="--node-ip=1.2.3.4 --address=0.0.0.0"` passes in the given flags to kubelet as-is. As such, you must confirm that any flags you are passing in are properly formatted and valued as k0s will not validate those flags.
+For example, running `k0s worker --token-file=k0s.token
+--kubelet-extra-args="--node-ip=1.2.3.4 --address=0.0.0.0"` passes in the given
+flags to Kubelet as-is. As such, you must confirm that any flags you are passing
+in are properly formatted and valued as k0s will not validate those flags.
 
-## Worker Profiles
+### Worker Profiles
 
-kubelet parameters can also be set via a worker profile. Worker profiles are defined in the main k0s.yaml and are used to generate a config map containing a custom `kubelet.config.k8s.io` object.
-To see examples of k0s.yaml containing worker profiles: [go here](./configuration.md#specworkerprofiles).
-For a list of possible kubelet configuration keys: [go here](https://kubernetes.io/docs/reference/config-api/kubelet-config.v1beta1/).
+Kubelet configuration fields can also be set via a worker profiles. Worker
+profiles are defined in the main k0s.yaml and are used to generate ConfigMaps
+containing a custom `kubelet.config.k8s.io/v1beta1/KubeletConfiguration` object.
+To see examples of k0s.yaml containing worker profiles: [go
+here](./configuration.md#specworkerprofiles). For a list of possible Kubelet
+configuration fields: [go
+here](https://kubernetes.io/docs/reference/config-api/kubelet-config.v1beta1/).
+
+## IPTables Mode
+
+k0s detects iptables backend automatically based on the existing records. On a brand-new setup, `iptables-nft` will be used.  
+There is a `--iptables-mode` flag to specify the mode explicitly. Valid values: `nft`, `legacy` and `auto` (default).
+
+```shell
+k0s worker --iptables-mode=nft
+```

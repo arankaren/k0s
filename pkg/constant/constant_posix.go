@@ -16,6 +16,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package constant
 
 import "fmt"
@@ -25,7 +26,7 @@ const (
 	DataDirDefault                 = "/var/lib/k0s"
 	KubeletVolumePluginDir         = "/usr/libexec/k0s/kubelet-plugins/volume/exec"
 	KineSocket                     = "kine/kine.sock:2379"
-	KubePauseContainerImage        = "k8s.gcr.io/pause"
+	KubePauseContainerImage        = "registry.k8s.io/pause"
 	KubePauseContainerImageVersion = "3.6"
 	K0sConfigPathDefault           = "/etc/k0s/k0s.yaml"
 )

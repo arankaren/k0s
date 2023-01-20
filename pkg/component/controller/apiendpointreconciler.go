@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package controller
 
 import (
@@ -22,19 +23,21 @@ import (
 	"sort"
 	"time"
 
-	"github.com/sirupsen/logrus"
+	"github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
+	"github.com/k0sproject/k0s/pkg/component/controller/leaderelector"
+	kubeutil "github.com/k0sproject/k0s/pkg/kubernetes"
+
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
-	"github.com/k0sproject/k0s/pkg/component"
-	k8sutil "github.com/k0sproject/k0s/pkg/kubernetes"
+	"github.com/k0sproject/k0s/pkg/component/manager"
+	"github.com/sirupsen/logrus"
 )
 
 // Dummy checks so we catch easily if we miss some interface implementation
-var _ component.Component = (*APIEndpointReconciler)(nil)
-var _ component.ReconcilerComponent = (*APIEndpointReconciler)(nil)
+var _ manager.Component = (*APIEndpointReconciler)(nil)
+var _ manager.Reconciler = (*APIEndpointReconciler)(nil)
 
 // APIEndpointReconciler is the component to reconcile in-cluster API address endpoint based from externalName
 type APIEndpointReconciler struct {
@@ -42,13 +45,13 @@ type APIEndpointReconciler struct {
 
 	logger *logrus.Entry
 
-	leaderElector     LeaderElector
+	leaderElector     leaderelector.Interface
 	stopCh            chan struct{}
-	kubeClientFactory k8sutil.ClientFactoryInterface
+	kubeClientFactory kubeutil.ClientFactoryInterface
 }
 
 // NewEndpointReconciler creates new endpoint reconciler
-func NewEndpointReconciler(leaderElector LeaderElector, kubeClientFactory k8sutil.ClientFactoryInterface) *APIEndpointReconciler {
+func NewEndpointReconciler(leaderElector leaderelector.Interface, kubeClientFactory kubeutil.ClientFactoryInterface) *APIEndpointReconciler {
 	return &APIEndpointReconciler{
 		leaderElector:     leaderElector,
 		stopCh:            make(chan struct{}),
@@ -63,7 +66,7 @@ func (a *APIEndpointReconciler) Init(_ context.Context) error {
 }
 
 // Run runs the main loop for reconciling the externalAddress
-func (a *APIEndpointReconciler) Run(ctx context.Context) error {
+func (a *APIEndpointReconciler) Start(ctx context.Context) error {
 
 	go func() {
 		ticker := time.NewTicker(10 * time.Second)
@@ -97,9 +100,6 @@ func (a *APIEndpointReconciler) Reconcile(ctx context.Context, cfg *v1beta1.Clus
 	return a.reconcileEndpoints(ctx)
 }
 
-// Healthy dummy implementation
-func (a *APIEndpointReconciler) Healthy() error { return nil }
-
 func (a *APIEndpointReconciler) reconcileEndpoints(ctx context.Context) error {
 	if a.clusterConfig == nil {
 		return nil
@@ -129,7 +129,7 @@ func (a *APIEndpointReconciler) reconcileEndpoints(ctx context.Context) error {
 
 	epClient := c.CoreV1().Endpoints("default")
 
-	ep, err := epClient.Get(ctx, "kubernetes", v1.GetOptions{})
+	ep, err := epClient.Get(ctx, "kubernetes", metav1.GetOptions{})
 	if err != nil {
 		if errors.IsNotFound(err) {
 			err := a.createEndpoint(ctx, ipStrings)
@@ -140,20 +140,18 @@ func (a *APIEndpointReconciler) reconcileEndpoints(ctx context.Context) error {
 	}
 
 	if len(ep.Subsets) == 0 || needsUpdate(ipStrings, ep) {
-		ep.Subsets = []corev1.EndpointSubset{
-			corev1.EndpointSubset{
-				Addresses: stringsToEndpointAddresses(ipStrings),
-				Ports: []corev1.EndpointPort{
-					corev1.EndpointPort{
-						Name:     "https",
-						Protocol: "TCP",
-						Port:     int32(a.clusterConfig.Spec.API.Port),
-					},
+		ep.Subsets = []corev1.EndpointSubset{{
+			Addresses: stringsToEndpointAddresses(ipStrings),
+			Ports: []corev1.EndpointPort{
+				{
+					Name:     "https",
+					Protocol: "TCP",
+					Port:     int32(a.clusterConfig.Spec.API.Port),
 				},
 			},
-		}
+		}}
 
-		_, err := epClient.Update(ctx, ep, v1.UpdateOptions{})
+		_, err := epClient.Update(ctx, ep, metav1.UpdateOptions{})
 		if err != nil {
 			return err
 		}
@@ -164,25 +162,23 @@ func (a *APIEndpointReconciler) reconcileEndpoints(ctx context.Context) error {
 
 func (a *APIEndpointReconciler) createEndpoint(ctx context.Context, addresses []string) error {
 	ep := &corev1.Endpoints{
-		TypeMeta: v1.TypeMeta{
+		TypeMeta: metav1.TypeMeta{
 			Kind:       "Endpoints",
 			APIVersion: "v1",
 		},
-		ObjectMeta: v1.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Name: "kubernetes",
 		},
-		Subsets: []corev1.EndpointSubset{
-			corev1.EndpointSubset{
-				Addresses: stringsToEndpointAddresses(addresses),
-				Ports: []corev1.EndpointPort{
-					corev1.EndpointPort{
-						Name:     "https",
-						Protocol: "TCP",
-						Port:     int32(a.clusterConfig.Spec.API.Port),
-					},
+		Subsets: []corev1.EndpointSubset{{
+			Addresses: stringsToEndpointAddresses(addresses),
+			Ports: []corev1.EndpointPort{
+				{
+					Name:     "https",
+					Protocol: "TCP",
+					Port:     int32(a.clusterConfig.Spec.API.Port),
 				},
 			},
-		},
+		}},
 	}
 
 	c, err := a.kubeClientFactory.GetClient()
@@ -190,7 +186,7 @@ func (a *APIEndpointReconciler) createEndpoint(ctx context.Context, addresses []
 		return err
 	}
 
-	_, err = c.CoreV1().Endpoints("default").Create(ctx, ep, v1.CreateOptions{})
+	_, err = c.CoreV1().Endpoints("default").Create(ctx, ep, metav1.CreateOptions{})
 	if err != nil {
 		return err
 	}

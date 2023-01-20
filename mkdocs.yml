@@ -10,21 +10,24 @@ copyright: Copyright &copy; 2021 <a href="https://mirantis.com/">Mirantis Inc.</
 edit_uri: ""
 nav:
   - Overview:                             README.md
-  - Install:
+  - Installation:
       - Quick Start Guide:                install.md
-      - Install using k0sctl:             k0sctl-install.md
-      - Alternative Install Methods:
-          - Manual Install (advanced):    k0s-multi-node.md
-          - Docker:                       k0s-in-docker.md
-          - Windows (experimental):       experimental-windows.md
-          - Raspberry Pi 4:               raspberry-pi4.md
-          - Ansible Playbook:             examples/ansible-playbook.md
-          - Airgap Install:               airgap-install.md
-      - Upgrade:                          upgrade.md
-      - Backup/Restore:                   backup.md
-      - Uninstall/Reset:                  reset.md
+      - Using k0sctl:                     k0sctl-install.md
+      - Alternative Methods:
+          - Manual (advanced):                      k0s-multi-node.md
+          - Docker:                                 k0s-in-docker.md
+          - Windows (experimental):                 experimental-windows.md
+          - Raspberry Pi 4:                         raspberry-pi4.md
+          - Ansible Playbook:                       examples/ansible-playbook.md
+          - Airgap Install:                         airgap-install.md
+          - Using custom CA certificate (advanced): custom-ca.md
       - System Requirements:              system-requirements.md
       - External runtime dependencies:    external-runtime-deps.md
+  - Maintenance:
+      - Upgrade:                          upgrade.md
+      - Backup/Restore:                   backup.md
+      - Remove/Replace a controller:      remove_controller.md
+      - Uninstall:                        reset.md
   - Usage:
       - Configuration Options:            configuration.md
       - Dynamic Configuration:            dynamic-configuration.md
@@ -39,12 +42,17 @@ nav:
       - Cloud Providers:                  cloud-providers.md
       - IPv4/IPv6 Dual-Stack:             dual-stack.md
       - Control Plane High Availability:  high-availability.md
+      - Node-local load balancing:        nllb.md
       - Shell Completion:                 shell-completion.md
       - User Management:                  user-management.md
       - Configuration of Environment Variables: environment-variables.md
       - OpenID Connect: ./examples/oidc/oidc-cluster-configuration.md
       - SELinux:                          selinux.md
       - Pod Security Standards:           podsecurity.md
+      - Re-install:                       reinstall-k0sctl.md
+  - Auto Updates:
+      - Overview:                         autopilot.md
+      - Multi-Command Plans:              autopilot-multicommand.md
   - Extensions:
       - MetalLB Load Balancer:            examples/metallb-loadbalancer.md
       - NGINX Ingress Controller:         examples/nginx-ingress.md
@@ -90,6 +98,15 @@ extra_css:
   - stylesheets/extra.css
 plugins:
   - search
+  - exclude:
+      glob:
+        - '*.etag'
+        - Dockerfile.serve-dev
+        - k0s
+        - k0s.exe
+        - Makefile*
+        - requirements_pip.txt
+        - requirements.txt
 
 markdown_extensions:
   - pymdownx.highlight: {}
@@ -101,6 +118,11 @@ markdown_extensions:
   - toc:
         permalink: "#"
         toc_depth: 3
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
 
 extra:
   generator: false

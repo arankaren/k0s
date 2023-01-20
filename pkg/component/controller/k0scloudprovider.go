@@ -13,13 +13,14 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package controller
 
 import (
 	"context"
 	"time"
 
-	"github.com/k0sproject/k0s/pkg/component"
+	"github.com/k0sproject/k0s/pkg/component/manager"
 	"github.com/k0sproject/k0s/pkg/k0scloudprovider"
 )
 
@@ -29,7 +30,7 @@ type K0sCloudProvider struct {
 	commandBuilder CommandBuilder
 }
 
-var _ component.Component = (*K0sCloudProvider)(nil)
+var _ manager.Component = (*K0sCloudProvider)(nil)
 
 // CommandBuilder allows for defining arbitrary functions that can
 // create `Command` instances.
@@ -67,7 +68,7 @@ func (c *K0sCloudProvider) Init(_ context.Context) error {
 
 // Run will create a k0s-cloud-provider command, and run it on a goroutine.
 // Failures to create this command will be returned as an error.
-func (c *K0sCloudProvider) Run(_ context.Context) error {
+func (c *K0sCloudProvider) Start(_ context.Context) error {
 	command, err := c.commandBuilder()
 	if err != nil {
 		return err
@@ -82,10 +83,5 @@ func (c *K0sCloudProvider) Run(_ context.Context) error {
 func (c *K0sCloudProvider) Stop() error {
 	close(c.stopCh)
 
-	return nil
-}
-
-// Healthy in the k0s-cloud-provider intentionally does nothing.
-func (c *K0sCloudProvider) Healthy() error {
 	return nil
 }

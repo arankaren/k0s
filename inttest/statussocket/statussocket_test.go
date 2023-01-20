@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package statussocket
 
 import (
@@ -33,7 +34,7 @@ func (s *StatusSocketSuite) TestK0sGetsUp() {
 	s.NoError(s.InitController(0, "--single"))
 
 	kc, err := s.KubeClient(s.ControllerNode(0))
-	s.NoError(err)
+	s.Require().NoError(err)
 
 	err = s.WaitForNodeReady(s.ControllerNode(0), kc)
 	s.NoError(err)

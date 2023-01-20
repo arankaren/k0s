@@ -13,14 +13,14 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package kubeconfig
 
 import (
 	"github.com/k0sproject/k0s/pkg/config"
+
 	"github.com/spf13/cobra"
 )
-
-type CmdOpts config.CLIOptions
 
 func NewKubeConfigCmd() *cobra.Command {
 	cmd := &cobra.Command{

@@ -13,22 +13,15 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package token
 
 import (
 	"fmt"
 
-	"github.com/spf13/cobra"
-
-	"github.com/k0sproject/k0s/pkg/config"
 	"github.com/k0sproject/k0s/pkg/token"
-)
 
-type CmdOpts config.CLIOptions
-
-var (
-	tokenExpiry string
-	waitCreate  bool
+	"github.com/spf13/cobra"
 )
 
 func NewTokenCmd() *cobra.Command {
@@ -41,6 +34,7 @@ func NewTokenCmd() *cobra.Command {
 	cmd.AddCommand(tokenCreateCmd())
 	cmd.AddCommand(tokenListCmd())
 	cmd.AddCommand(tokenInvalidateCmd())
+	cmd.AddCommand(preSharedCmd())
 	return cmd
 }
 

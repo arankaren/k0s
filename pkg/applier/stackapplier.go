@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package applier
 
 import (
@@ -107,19 +108,17 @@ func (s *StackApplier) Run(ctx context.Context) error {
 }
 
 func (*StackApplier) triggersApply(event fsnotify.Event) bool {
-	// always let the initial apply happen
+	// Always let the initial apply happen
 	if event == (fsnotify.Event{}) {
 		return true
 	}
 
-	// ignore chmods (3845479a0)
-	if event.Op == fsnotify.Chmod {
+	// Only consider events on manifest files
+	if match, _ := filepath.Match(manifestFilePattern, filepath.Base(event.Name)); !match {
 		return false
 	}
 
-	// Only consider events on manifest files
-	match, _ := filepath.Match(manifestFilePattern, filepath.Base(event.Name))
-	return match
+	return true
 }
 
 func (s *StackApplier) apply(ctx context.Context) {
@@ -128,7 +127,7 @@ func (s *StackApplier) apply(ctx context.Context) {
 	err := retry.Do(
 		func() error { return s.doApply(ctx) },
 		retry.OnRetry(func(attempt uint, err error) {
-			s.log.WithError(err).Warnf("Retrying after backoff, attempt #%d", attempt)
+			s.log.WithError(err).Warnf("Failed to apply manifests in attempt #%d, retrying after backoff", attempt+1)
 		}),
 		retry.Context(ctx),
 		retry.LastErrorOnly(true),

@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package config
 
 import (
@@ -23,16 +24,17 @@ import (
 	"strings"
 	"time"
 
+	"github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
+	aproot "github.com/k0sproject/k0s/pkg/autopilot/controller/root"
+	"github.com/k0sproject/k0s/pkg/component/manager"
+	"github.com/k0sproject/k0s/pkg/constant"
+
+	cloudprovider "k8s.io/cloud-provider"
+
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
-	k8s "k8s.io/client-go/kubernetes"
-	cloudprovider "k8s.io/cloud-provider"
-
-	"github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
-	aproot "github.com/k0sproject/k0s/pkg/autopilot/controller/root"
-	"github.com/k0sproject/k0s/pkg/component"
-	"github.com/k0sproject/k0s/pkg/constant"
+	"golang.org/x/exp/slices"
 )
 
 var (
@@ -53,13 +55,11 @@ type CLIOptions struct {
 	WorkerOptions
 	ControllerOptions
 	CfgFile          string
-	ClusterConfig    *v1beta1.ClusterConfig
 	NodeConfig       *v1beta1.ClusterConfig
 	Debug            bool
 	DebugListenOn    string
 	DefaultLogLevels map[string]string
 	K0sVars          constant.CfgVars
-	KubeClient       k8s.Interface
 	Logging          map[string]string // merged outcome of default log levels and cmdLoglevels
 	Verbose          bool
 	AutopilotRoot    aproot.Root
@@ -72,11 +72,11 @@ type ControllerOptions struct {
 	NoTaints          bool
 	DisableComponents []string
 
-	ClusterComponents               *component.Manager
+	ClusterComponents               *manager.Manager
 	EnableK0sCloudProvider          bool
 	K0sCloudProviderPort            int
 	K0sCloudProviderUpdateFrequency time.Duration
-	NodeComponents                  *component.Manager
+	NodeComponents                  *manager.Manager
 	EnableDynamicConfig             bool
 	EnableMetricsScraper            bool
 	KubeControllerManagerExtraArgs  string
@@ -96,6 +96,31 @@ type WorkerOptions struct {
 	TokenFile        string
 	TokenArg         string
 	WorkerProfile    string
+	IPTablesMode     string
+}
+
+func (o *ControllerOptions) Normalize() error {
+	// Normalize component names
+	var disabledComponents []string
+	for _, disabledComponent := range o.DisableComponents {
+		if disabledComponent == constant.KubeletConfigComponentName {
+			logrus.Warnf("Usage of deprecated component name %q, please switch to %q",
+				constant.KubeletConfigComponentName, constant.WorkerConfigComponentName,
+			)
+			disabledComponent = constant.WorkerConfigComponentName
+		}
+
+		if !slices.Contains(availableComponents, disabledComponent) {
+			return fmt.Errorf("unknown component %s", disabledComponent)
+		}
+
+		if !slices.Contains(disabledComponents, disabledComponent) {
+			disabledComponents = append(disabledComponents, disabledComponent)
+		}
+	}
+	o.DisableComponents = disabledComponents
+
+	return nil
 }
 
 func DefaultLogLevels() map[string]string {
@@ -154,27 +179,29 @@ func GetWorkerFlags() *pflag.FlagSet {
 	flagset.StringSliceVarP(&workerOpts.Labels, "labels", "", []string{}, "Node labels, list of key=value pairs")
 	flagset.StringSliceVarP(&workerOpts.Taints, "taints", "", []string{}, "Node taints, list of key=value:effect strings")
 	flagset.StringVar(&workerOpts.KubeletExtraArgs, "kubelet-extra-args", "", "extra args for kubelet")
+	flagset.StringVar(&workerOpts.IPTablesMode, "iptables-mode", "", "iptables mode (valid values: nft, legacy, auto). default: auto")
 	flagset.AddFlagSet(GetCriSocketFlag())
 
 	return flagset
 }
 
-func AvailableComponents() []string {
-	return []string{
-		constant.KonnectivityServerComponentName,
-		constant.KubeSchedulerComponentName,
-		constant.KubeControllerManagerComponentName,
-		constant.ControlAPIComponentName,
-		constant.CsrApproverComponentName,
-		constant.DefaultPspComponentName,
-		constant.KubeProxyComponentName,
-		constant.CoreDNSComponentname,
-		constant.NetworkProviderComponentName,
-		constant.HelmComponentName,
-		constant.MetricsServerComponentName,
-		constant.KubeletConfigComponentName,
-		constant.SystemRbacComponentName,
-	}
+var availableComponents = []string{
+	constant.APIConfigComponentName,
+	constant.AutopilotComponentName,
+	constant.ControlAPIComponentName,
+	constant.CoreDNSComponentname,
+	constant.CsrApproverComponentName,
+	constant.APIEndpointReconcilerComponentName,
+	constant.HelmComponentName,
+	constant.KonnectivityServerComponentName,
+	constant.KubeControllerManagerComponentName,
+	constant.KubeProxyComponentName,
+	constant.KubeSchedulerComponentName,
+	constant.MetricsServerComponentName,
+	constant.NetworkProviderComponentName,
+	constant.NodeRoleComponentName,
+	constant.SystemRbacComponentName,
+	constant.WorkerConfigComponentName,
 }
 
 func GetControllerFlags() *pflag.FlagSet {
@@ -182,7 +209,7 @@ func GetControllerFlags() *pflag.FlagSet {
 
 	flagset.StringVar(&workerOpts.WorkerProfile, "profile", "default", "worker profile to use on the node")
 	flagset.BoolVar(&controllerOpts.EnableWorker, "enable-worker", false, "enable worker (default false)")
-	flagset.StringSliceVar(&controllerOpts.DisableComponents, "disable-components", []string{}, "disable components (valid items: "+strings.Join(AvailableComponents()[:], ",")+")")
+	flagset.StringSliceVar(&controllerOpts.DisableComponents, "disable-components", []string{}, "disable components (valid items: "+strings.Join(availableComponents, ",")+")")
 	flagset.StringVar(&workerOpts.TokenFile, "token-file", "", "Path to the file containing join-token.")
 	flagset.StringToStringVarP(&workerOpts.CmdLogLevels, "logging", "l", DefaultLogLevels(), "Logging Levels for the different components")
 	flagset.BoolVar(&controllerOpts.SingleNode, "single", false, "enable single node (implies --enable-worker, default false)")
@@ -219,9 +246,10 @@ func GetCmdOpts() CLIOptions {
 
 	// When CfgFile is set, verify the file can be opened
 	if CfgFile != "" {
-		_, err := os.Open(CfgFile)
-		if err != nil {
-			logrus.Fatalf("failed to load config file (%s): %v", CfgFile, err)
+		if fd, err := os.Open(CfgFile); err != nil {
+			logrus.WithError(err).Fatalf("Cannot access config file (%s)", CfgFile)
+		} else {
+			_ = fd.Close()
 		}
 	}
 
@@ -230,7 +258,6 @@ func GetCmdOpts() CLIOptions {
 		WorkerOptions:     workerOpts,
 
 		CfgFile:          CfgFile,
-		ClusterConfig:    getClusterConfig(K0sVars),
 		NodeConfig:       getNodeConfig(K0sVars),
 		Debug:            Debug,
 		Verbose:          Verbose,
@@ -280,6 +307,7 @@ func PreRunValidateConfig(k0sVars constant.CfgVars) error {
 	}
 	return nil
 }
+
 func getNodeConfig(k0sVars constant.CfgVars) *v1beta1.ClusterConfig {
 	loadingRules := ClientConfigLoadingRules{Nodeconfig: true, K0sVars: k0sVars}
 	cfg, err := loadingRules.Load()
@@ -289,11 +317,7 @@ func getNodeConfig(k0sVars constant.CfgVars) *v1beta1.ClusterConfig {
 	return cfg
 }
 
-func getClusterConfig(k0sVars constant.CfgVars) *v1beta1.ClusterConfig {
+func LoadClusterConfig(k0sVars constant.CfgVars) (*v1beta1.ClusterConfig, error) {
 	loadingRules := ClientConfigLoadingRules{K0sVars: k0sVars}
-	cfg, err := loadingRules.Load()
-	if err != nil {
-		return nil
-	}
-	return cfg
+	return loadingRules.Load()
 }

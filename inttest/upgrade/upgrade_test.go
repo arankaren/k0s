@@ -13,10 +13,10 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package basic
 
 import (
-	"context"
 	"fmt"
 	"testing"
 
@@ -24,15 +24,13 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/k0sproject/k0s/inttest/common"
-
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 type UpgradeSuite struct {
 	common.FootlooseSuite
 }
 
-const previousVersion = "v1.23.8+k0s.0"
+const previousVersion = "v1.24.4+k0s.0"
 
 func (s *UpgradeSuite) TestK0sGetsUp() {
 	dlCommand := fmt.Sprintf("curl -sSfL https://get.k0s.sh | K0S_VERSION=%s sh", previousVersion)
@@ -43,15 +41,15 @@ func (s *UpgradeSuite) TestK0sGetsUp() {
 			return err
 		}
 		defer ssh.Disconnect()
-		_, err = ssh.ExecWithOutput(dlCommand)
+		_, err = ssh.ExecWithOutput(s.Context(), dlCommand)
 		if err != nil {
 			return err
 		}
-		_, err = ssh.ExecWithOutput("/usr/local/bin/k0s install controller")
+		_, err = ssh.ExecWithOutput(s.Context(), "/usr/local/bin/k0s install controller")
 		if err != nil {
 			return err
 		}
-		_, err = ssh.ExecWithOutput("/usr/local/bin/k0s start")
+		_, err = ssh.ExecWithOutput(s.Context(), "/usr/local/bin/k0s start")
 		if err != nil {
 			return err
 		}
@@ -66,7 +64,7 @@ func (s *UpgradeSuite) TestK0sGetsUp() {
 				return err
 			}
 			defer ssh.Disconnect()
-			_, err = ssh.ExecWithOutput(dlCommand)
+			_, err = ssh.ExecWithOutput(s.Context(), dlCommand)
 			if err != nil {
 				return err
 			}
@@ -81,7 +79,7 @@ func (s *UpgradeSuite) TestK0sGetsUp() {
 
 	s.Require().NoError(s.WaitForKubeAPI(s.ControllerNode(0)))
 	token, err := s.GetJoinToken("worker")
-	s.NoError(err)
+	s.Require().NoError(err)
 
 	for i := 0; i < s.WorkerCount; i++ {
 		node := s.WorkerNode(i)
@@ -92,12 +90,12 @@ func (s *UpgradeSuite) TestK0sGetsUp() {
 			}
 			defer ssh.Disconnect()
 			s.PutFile(node, "/etc/k0s.token", token)
-			_, err = ssh.ExecWithOutput("/usr/local/bin/k0s install worker --token-file /etc/k0s.token")
+			_, err = ssh.ExecWithOutput(s.Context(), "/usr/local/bin/k0s install worker --token-file /etc/k0s.token")
 			if err != nil {
 				return err
 			}
 			// plain "k0s start" does not seem to work on open-rc
-			_, err = ssh.ExecWithOutput("service k0sworker start")
+			_, err = ssh.ExecWithOutput(s.Context(), "service k0sworker start")
 			if err != nil {
 				return err
 			}
@@ -107,7 +105,7 @@ func (s *UpgradeSuite) TestK0sGetsUp() {
 	s.Require().NoError(g.Wait())
 
 	kc, err := s.KubeClient(s.ControllerNode(0))
-	s.NoError(err)
+	s.Require().NoError(err)
 
 	err = s.WaitForNodeReady(s.WorkerNode(0), kc)
 	s.NoError(err)
@@ -115,18 +113,10 @@ func (s *UpgradeSuite) TestK0sGetsUp() {
 	err = s.WaitForNodeReady(s.WorkerNode(1), kc)
 	s.NoError(err)
 
-	pods, err := kc.CoreV1().Pods("kube-system").List(context.TODO(), v1.ListOptions{
-		Limit: 100,
-	})
-	s.NoError(err)
-
-	podCount := len(pods.Items)
-
-	s.T().Logf("found %d pods in kube-system", podCount)
-	s.Greater(podCount, 0, "expecting to see few pods in kube-system namespace")
+	s.AssertSomeKubeSystemPods(kc)
 
 	s.T().Log("waiting to see kube-router pods ready")
-	s.NoError(common.WaitForKubeRouterReady(kc), "kube-router did not start")
+	s.NoError(common.WaitForKubeRouterReady(s.Context(), kc), "kube-router did not start")
 
 	// Prev version gets up, let's upgrade everything
 	// Upgrade is just swapping the bin and restarting
@@ -138,11 +128,11 @@ func (s *UpgradeSuite) TestK0sGetsUp() {
 				return err
 			}
 			defer ssh.Disconnect()
-			_, err = ssh.ExecWithOutput("cp -f /dist/k0s /usr/local/bin/k0s")
+			_, err = ssh.ExecWithOutput(s.Context(), "cp -f /dist/k0s /usr/local/bin/k0s")
 			if err != nil {
 				return err
 			}
-			_, err = ssh.ExecWithOutput("service k0scontroller restart")
+			_, err = ssh.ExecWithOutput(s.Context(), "service k0scontroller restart")
 			if err != nil {
 				return err
 			}
@@ -157,11 +147,11 @@ func (s *UpgradeSuite) TestK0sGetsUp() {
 				return err
 			}
 			defer ssh.Disconnect()
-			_, err = ssh.ExecWithOutput("cp -f /dist/k0s /usr/local/bin/k0s")
+			_, err = ssh.ExecWithOutput(s.Context(), "cp -f /dist/k0s /usr/local/bin/k0s")
 			if err != nil {
 				return err
 			}
-			_, err = ssh.ExecWithOutput("service k0sworker restart")
+			_, err = ssh.ExecWithOutput(s.Context(), "service k0sworker restart")
 			if err != nil {
 				return err
 			}
@@ -183,6 +173,7 @@ func TestUpgradeSuite(t *testing.T) {
 		common.FootlooseSuite{
 			ControllerCount: 1,
 			WorkerCount:     2,
+			LaunchMode:      common.LaunchModeOpenRC,
 		},
 	}
 	suite.Run(t, &s)

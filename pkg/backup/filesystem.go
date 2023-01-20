@@ -16,6 +16,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package backup
 
 import (
@@ -76,9 +77,9 @@ func (d FileSystemStep) Restore(restoreFrom, restoreTo string) error {
 		logrus.Debugf("Path `%s` not found in the archive, skipping...", objectPathInArchive)
 		return nil
 	}
-	logrus.Infof("restoring from `%s` to `%s`", objectPathInArchive, objectPathInRestored)
+	logrus.Infof("restoring from `%s` to `%s`", objectPathInArchive, restoreTo)
 	if stat.IsDir() {
-		return dir.Copy(objectPathInArchive, objectPathInRestored)
+		return dir.Copy(objectPathInArchive, restoreTo)
 	}
 	return file.Copy(objectPathInArchive, objectPathInRestored)
 }

@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package controller
 
 import (
@@ -33,24 +34,26 @@ import (
 	"github.com/k0sproject/k0s/internal/pkg/users"
 	"github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
 	"github.com/k0sproject/k0s/pkg/assets"
-	"github.com/k0sproject/k0s/pkg/component"
+	"github.com/k0sproject/k0s/pkg/component/manager"
 	"github.com/k0sproject/k0s/pkg/constant"
 	"github.com/k0sproject/k0s/pkg/supervisor"
 )
 
 // APIServer implement the component interface to run kube api
 type APIServer struct {
-	ClusterConfig      *v1beta1.ClusterConfig
-	K0sVars            constant.CfgVars
-	LogLevel           string
-	Storage            component.Component
-	EnableKonnectivity bool
-	gid                int
-	supervisor         supervisor.Supervisor
-	uid                int
+	ClusterConfig             *v1beta1.ClusterConfig
+	K0sVars                   constant.CfgVars
+	LogLevel                  string
+	Storage                   manager.Component
+	EnableKonnectivity        bool
+	DisableEndpointReconciler bool
+	gid                       int
+	supervisor                supervisor.Supervisor
+	uid                       int
 }
 
-var _ component.Component = (*APIServer)(nil)
+var _ manager.Component = (*APIServer)(nil)
+var _ manager.Ready = (*APIServer)(nil)
 
 var apiDefaultArgs = map[string]string{
 	"allow-privileged":                   "true",
@@ -89,7 +92,7 @@ func (a *APIServer) Init(_ context.Context) error {
 }
 
 // Run runs kube api
-func (a *APIServer) Run(_ context.Context) error {
+func (a *APIServer) Start(_ context.Context) error {
 	logrus.Info("Starting kube-apiserver")
 	args := stringmap.StringMap{
 		"advertise-address":                a.ClusterConfig.Spec.API.Address,
@@ -114,7 +117,7 @@ func (a *APIServer) Run(_ context.Context) error {
 		"profiling":                        "false",
 		"v":                                a.LogLevel,
 		"kubelet-certificate-authority":    path.Join(a.K0sVars.CertRootDir, "ca.crt"),
-		"enable-admission-plugins":         "NodeRestriction,PodSecurityPolicy",
+		"enable-admission-plugins":         "NodeRestriction",
 	}
 
 	apiAudiences := []string{"https://kubernetes.default.svc"}
@@ -131,22 +134,19 @@ func (a *APIServer) Run(_ context.Context) error {
 	args["api-audiences"] = strings.Join(apiAudiences, ",")
 
 	for name, value := range a.ClusterConfig.Spec.API.ExtraArgs {
-		if args[name] != "" {
+		if _, ok := args[name]; ok {
 			logrus.Warnf("overriding apiserver flag with user provided value: %s", name)
 		}
 		args[name] = value
 	}
 
-	if a.ClusterConfig.Spec.Network.DualStack.Enabled {
-		args = v1beta1.EnableFeatureGate(args, v1beta1.DualStackFeatureGate)
-	}
 	args = v1beta1.EnableFeatureGate(args, v1beta1.ServiceInternalTrafficPolicyFeatureGate)
 	for name, value := range apiDefaultArgs {
 		if args[name] == "" {
 			args[name] = value
 		}
 	}
-	if a.ClusterConfig.Spec.API.ExternalAddress != "" || a.ClusterConfig.Spec.API.TunneledNetworkingMode {
+	if a.DisableEndpointReconciler {
 		args["endpoint-reconciler-type"] = "none"
 	}
 
@@ -197,7 +197,7 @@ func (a *APIServer) Stop() error {
 }
 
 // Health-check interface
-func (a *APIServer) Healthy() error {
+func (a *APIServer) Ready() error {
 	// Load client cert so the api can authenitcate the request.
 	certFile := path.Join(a.K0sVars.CertRootDir, "admin.crt")
 	keyFile := path.Join(a.K0sVars.CertRootDir, "admin.key")

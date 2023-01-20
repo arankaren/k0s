@@ -13,16 +13,14 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package airgap
 
 import (
-	"context"
-	"os"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/suite"
-	"github.com/weaveworks/footloose/pkg/config"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/k0sproject/k0s/inttest/common"
@@ -34,53 +32,42 @@ spec:
     default_pull_policy: Never
 `
 
-const etcHosts = `
-127.0.0.8 docker.io
-127.0.0.8 gcr.io
-127.0.0.8 k8s.gcr.io
-127.0.0.8 us.gcr.io
-127.0.0.8 quay.io
-`
-
 type AirgapSuite struct {
 	common.FootlooseSuite
 }
 
 func (s *AirgapSuite) TestK0sGetsUp() {
-	s.AppendFile(s.ControllerNode(0), "/etc/hosts", etcHosts)
-	s.AppendFile(s.WorkerNode(0), "/etc/hosts", etcHosts)
+	(&common.Airgap{
+		SSH:  s.SSH,
+		Logf: s.T().Logf,
+	}).LockdownMachines(s.Context(),
+		s.ControllerNode(0), s.WorkerNode(0),
+	)
+
 	s.PutFile(s.ControllerNode(0), "/tmp/k0s.yaml", k0sConfig)
 	s.NoError(s.InitController(0, "--config=/tmp/k0s.yaml"))
 	s.NoError(s.RunWorkers(`--labels="k0sproject.io/foo=bar"`, `--kubelet-extra-args="--address=0.0.0.0 --event-burst=10 --image-gc-high-threshold=100"`))
 
 	kc, err := s.KubeClient(s.ControllerNode(0))
-	s.NoError(err)
+	s.Require().NoError(err)
 
 	err = s.WaitForNodeReady(s.WorkerNode(0), kc)
 	s.NoError(err)
 
-	labels, err := s.GetNodeLabels(s.WorkerNode(0), kc)
-	s.NoError(err)
-	s.Equal("bar", labels["k0sproject.io/foo"])
+	if labels, err := s.GetNodeLabels(s.WorkerNode(0), kc); s.NoError(err) {
+		s.Equal("bar", labels["k0sproject.io/foo"])
+	}
 
-	pods, err := kc.CoreV1().Pods("kube-system").List(context.TODO(), v1.ListOptions{
-		Limit: 100,
-	})
-	s.NoError(err)
-
-	podCount := len(pods.Items)
-
-	s.T().Logf("found %d pods in kube-system", podCount)
-	s.Greater(podCount, 0, "expecting to see few pods in kube-system namespace")
+	s.AssertSomeKubeSystemPods(kc)
 
 	s.T().Log("waiting to see kube-router pods ready")
-	s.NoError(common.WaitForKubeRouterReady(kc), "kube-router did not start")
+	s.NoError(common.WaitForKubeRouterReady(s.Context(), kc), "kube-router did not start")
 
 	// at that moment we can assume that all pods has at least started
-	events, err := kc.CoreV1().Events("kube-system").List(context.TODO(), v1.ListOptions{
+	events, err := kc.CoreV1().Events("kube-system").List(s.Context(), v1.ListOptions{
 		Limit: 100,
 	})
-	s.NoError(err)
+	s.Require().NoError(err)
 	imagesUsed := 0
 	var pulledImagesMessages []string
 	for _, event := range events.Items {
@@ -110,13 +97,8 @@ func TestAirgapSuite(t *testing.T) {
 		common.FootlooseSuite{
 			ControllerCount: 1,
 			WorkerCount:     1,
-			ExtraVolumes: []config.Volume{
-				{
-					Type:        "bind",
-					Source:      os.Getenv("K0S_IMAGES_BUNDLE"),
-					Destination: "/var/lib/k0s/images/bundle.tar",
-				},
-			},
+
+			AirgapImageBundleMountPoints: []string{"/var/lib/k0s/images/bundle.tar"},
 		},
 	}
 	suite.Run(t, &s)

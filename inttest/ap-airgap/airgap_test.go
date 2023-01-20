@@ -15,7 +15,6 @@
 package airgap
 
 import (
-	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -45,7 +44,7 @@ func (s *airgapSuite) SetupSuite() {
 // TearDownSuite tears down the network created after footloose has finished.
 func (s *airgapSuite) TearDownSuite() {
 	s.FootlooseSuite.TearDownSuite()
-	s.Require().NoError(s.DestroyNetwork(network))
+	s.Require().NoError(s.MaybeDestroyNetwork(network))
 }
 
 // SetupTest prepares the controller and filesystem, getting it into a consistent
@@ -58,9 +57,9 @@ func (s *airgapSuite) SetupTest() {
 	cClient, err := s.ExtensionsClient(s.ControllerNode(0))
 	s.Require().NoError(err)
 
-	_, perr := apcomm.WaitForCRDByName(context.TODO(), cClient, "plans.autopilot.k0sproject.io", 2*time.Minute)
+	_, perr := apcomm.WaitForCRDByName(s.Context(), cClient, "plans.autopilot.k0sproject.io", 2*time.Minute)
 	s.Require().NoError(perr)
-	_, cerr := apcomm.WaitForCRDByName(context.TODO(), cClient, "controlnodes.autopilot.k0sproject.io", 2*time.Minute)
+	_, cerr := apcomm.WaitForCRDByName(s.Context(), cClient, "controlnodes.autopilot.k0sproject.io", 2*time.Minute)
 	s.Require().NoError(cerr)
 
 	// Create a worker join token
@@ -91,6 +90,8 @@ spec:
         platforms:
           linux-amd64:
             url: http://localhost/dist/bundle.tar
+          linux-arm64:
+            url: http://localhost/dist/bundle.tar
         workers:
           discovery:
             static:
@@ -101,6 +102,8 @@ spec:
         forceupdate: true
         platforms:
           linux-amd64:
+            url: http://localhost/dist/k0s
+          linux-arm64:
             url: http://localhost/dist/k0s
         targets:
           controllers:
@@ -123,19 +126,15 @@ spec:
 	s.Require().NoError(err)
 
 	client, err := s.AutopilotClient(s.ControllerNode(0))
-	s.NoError(err)
+	s.Require().NoError(err)
 	s.NotEmpty(client)
 
 	// The plan has enough information to perform a successful update of k0s, so wait for it.
-	plan, err := apcomm.WaitForPlanByName(context.TODO(), client, apconst.AutopilotName, 10*time.Minute, func(obj interface{}) bool {
-		if plan, ok := obj.(*apv1beta2.Plan); ok {
-			return plan.Status.State == appc.PlanCompleted
-		}
-
-		return false
+	plan, err := apcomm.WaitForPlanByName(s.Context(), client, apconst.AutopilotName, 10*time.Minute, func(plan *apv1beta2.Plan) bool {
+		return plan.Status.State == appc.PlanCompleted
 	})
 
-	s.NoError(err)
+	s.Require().NoError(err)
 	s.Equal(appc.PlanCompleted, plan.Status.State)
 
 	// We are not confirming the image importing functionality of k0s, but we can get a pretty good idea if it worked.
@@ -154,6 +153,8 @@ func TestAirgapSuite(t *testing.T) {
 			ControllerCount: 1,
 			WorkerCount:     1,
 			LaunchMode:      common.LaunchModeOpenRC,
+
+			AirgapImageBundleMountPoints: []string{"/dist/bundle.tar"},
 
 			ControllerNetworks: []string{network},
 			WorkerNetworks:     []string{network},

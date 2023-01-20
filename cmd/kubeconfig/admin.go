@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package kubeconfig
 
 import (
@@ -20,9 +21,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/cloudflare/cfssl/log"
-	"github.com/k0sproject/k0s/internal/pkg/file"
 	"github.com/k0sproject/k0s/pkg/config"
+
 	"github.com/spf13/cobra"
 )
 
@@ -35,20 +35,16 @@ func kubeConfigAdminCmd() *cobra.Command {
 	$ export KUBECONFIG=~/.kube/config
 	$ kubectl get nodes`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			c := CmdOpts(config.GetCmdOpts())
-			if file.Exists(c.K0sVars.AdminKubeConfigPath) {
-				content, err := os.ReadFile(c.K0sVars.AdminKubeConfigPath)
-				if err != nil {
-					log.Fatal(err)
-				}
-
-				clusterAPIURL := c.NodeConfig.Spec.API.APIAddressURL()
-				newContent := strings.Replace(string(content), "https://localhost:6443", clusterAPIURL, -1)
-				os.Stdout.Write([]byte(newContent))
-			} else {
-				return fmt.Errorf("failed to read admin config, check if the control plane is initialized on this node")
+			c := config.GetCmdOpts()
+			content, err := os.ReadFile(c.K0sVars.AdminKubeConfigPath)
+			if err != nil {
+				return fmt.Errorf("failed to read admin config, check if the control plane is initialized on this node: %w", err)
 			}
-			return nil
+
+			clusterAPIURL := c.NodeConfig.Spec.API.APIAddressURL()
+			newContent := strings.Replace(string(content), "https://localhost:6443", clusterAPIURL, -1)
+			_, err = cmd.OutOrStdout().Write([]byte(newContent))
+			return err
 		},
 	}
 	cmd.PersistentFlags().AddFlagSet(config.GetPersistentFlagSet())

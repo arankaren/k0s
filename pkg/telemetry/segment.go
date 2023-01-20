@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package telemetry
 
 import (
@@ -27,6 +28,13 @@ const heartbeatEvent = "cluster-heartbeat"
 type analyticsClient interface {
 	Enqueue(msg analytics.Message) error
 	Close() error
+}
+
+func NewDefaultSegmentClient() analyticsClient {
+	if segmentToken == "" {
+		return nil
+	}
+	return newSegmentClient(segmentToken)
 }
 
 func newSegmentClient(segmentToken string) analyticsClient {

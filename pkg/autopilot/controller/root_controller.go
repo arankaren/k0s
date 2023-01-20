@@ -28,9 +28,11 @@ import (
 	aproot "github.com/k0sproject/k0s/pkg/autopilot/controller/root"
 	apsig "github.com/k0sproject/k0s/pkg/autopilot/controller/signal"
 	apupdate "github.com/k0sproject/k0s/pkg/autopilot/controller/updates"
+	"github.com/k0sproject/k0s/pkg/kubernetes"
 
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	cr "sigs.k8s.io/controller-runtime"
 	crcli "sigs.k8s.io/controller-runtime/pkg/client"
 	crman "sigs.k8s.io/controller-runtime/pkg/manager"
@@ -43,9 +45,10 @@ type leaseWatcherCreatorFunc func(*logrus.Entry, apcli.FactoryInterface) (LeaseW
 type setupFunc func(ctx context.Context, cf apcli.FactoryInterface) error
 
 type rootController struct {
-	cfg           aproot.RootConfig
-	log           *logrus.Entry
-	clientFactory apcli.FactoryInterface
+	cfg                    aproot.RootConfig
+	log                    *logrus.Entry
+	kubeClientFactory      kubernetes.ClientFactoryInterface
+	autopilotClientFactory apcli.FactoryInterface
 
 	startSubHandler        subControllerStartFunc
 	startSubHandlerRoutine subControllerStartRoutineFunc
@@ -57,11 +60,12 @@ type rootController struct {
 var _ aproot.Root = (*rootController)(nil)
 
 // NewRootController builds a root for autopilot "controller" operations.
-func NewRootController(cfg aproot.RootConfig, logger *logrus.Entry, enableWorker bool, cf apcli.FactoryInterface) (aproot.Root, error) {
+func NewRootController(cfg aproot.RootConfig, logger *logrus.Entry, enableWorker bool, cf kubernetes.ClientFactoryInterface, acf apcli.FactoryInterface) (aproot.Root, error) {
 	c := &rootController{
-		cfg:           cfg,
-		log:           logger,
-		clientFactory: cf,
+		cfg:                    cfg,
+		log:                    logger,
+		autopilotClientFactory: acf,
+		kubeClientFactory:      cf,
 	}
 
 	// Default implementations that can be overridden for testing.
@@ -82,11 +86,11 @@ func (c *rootController) Run(ctx context.Context) error {
 	_ = cancel
 
 	// Create / initialize kubernetes objects as needed
-	if err := c.setupHandler(ctx, c.clientFactory); err != nil {
+	if err := c.setupHandler(ctx, c.autopilotClientFactory); err != nil {
 		return fmt.Errorf("setup controller failed to complete: %w", err)
 	}
 
-	leaseWatcher, err := c.leaseWatcherCreator(c.log, c.clientFactory)
+	leaseWatcher, err := c.leaseWatcherCreator(c.log, c.autopilotClientFactory)
 	if err != nil {
 		return fmt.Errorf("unable to setup lease watcher: %w", err)
 	}
@@ -144,7 +148,7 @@ func (c *rootController) startSubControllerRoutine(ctx context.Context, logger *
 		HealthProbeBindAddress: c.cfg.HealthProbeBindAddr,
 	}
 
-	mgr, err := cr.NewManager(c.clientFactory.RESTConfig(), managerOpts)
+	mgr, err := cr.NewManager(c.autopilotClientFactory.RESTConfig(), managerOpts)
 	if err != nil {
 		logger.WithError(err).Error("unable to start controller manager")
 		return err
@@ -162,7 +166,7 @@ func (c *rootController) startSubControllerRoutine(ctx context.Context, logger *
 
 	leaderMode := event == LeaseAcquired
 
-	prober, err := NewReadyProber(logger, c.clientFactory, mgr.GetConfig(), 1*time.Minute)
+	prober, err := NewReadyProber(logger, c.autopilotClientFactory, mgr.GetConfig(), 1*time.Minute)
 	if err != nil {
 		logger.WithError(err).Error("unable to create controller prober: %w")
 		return err
@@ -184,17 +188,27 @@ func (c *rootController) startSubControllerRoutine(ctx context.Context, logger *
 		)),
 	}
 
-	if err := apsig.RegisterControllers(ctx, logger, mgr, delegateMap[apdel.ControllerDelegateController], c.cfg.K0sDataDir); err != nil {
+	cl, err := c.autopilotClientFactory.GetClient()
+	if err != nil {
+		return err
+	}
+	ns, err := cl.CoreV1().Namespaces().Get(ctx, "kube-system", v1.GetOptions{})
+	if err != nil {
+		return err
+	}
+	clusterID := string(ns.UID)
+
+	if err := apsig.RegisterControllers(ctx, logger, mgr, delegateMap[apdel.ControllerDelegateController], c.cfg.K0sDataDir, clusterID); err != nil {
 		logger.WithError(err).Error("unable to register 'signal' controllers")
 		return err
 	}
 
-	if err := applan.RegisterControllers(ctx, logger, mgr, leaderMode, delegateMap, c.cfg.ExcludeFromPlans); err != nil {
+	if err := applan.RegisterControllers(ctx, logger, mgr, c.kubeClientFactory, leaderMode, delegateMap, c.cfg.ExcludeFromPlans); err != nil {
 		logger.WithError(err).Error("unable to register 'plans' controllers")
 		return err
 	}
 
-	if err := apupdate.RegisterControllers(ctx, logger, mgr, c.clientFactory, leaderMode); err != nil {
+	if err := apupdate.RegisterControllers(ctx, logger, mgr, c.autopilotClientFactory, leaderMode, clusterID); err != nil {
 		logger.WithError(err).Error("unable to register 'update' controllers")
 		return err
 	}

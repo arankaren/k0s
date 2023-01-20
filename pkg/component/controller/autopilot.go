@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package controller
 
 import (
@@ -22,14 +23,14 @@ import (
 	apcli "github.com/k0sproject/k0s/pkg/autopilot/client"
 	apcont "github.com/k0sproject/k0s/pkg/autopilot/controller"
 	aproot "github.com/k0sproject/k0s/pkg/autopilot/controller/root"
+	"github.com/k0sproject/k0s/pkg/component/manager"
 
-	"github.com/k0sproject/k0s/pkg/component"
 	"github.com/k0sproject/k0s/pkg/constant"
 	"github.com/k0sproject/k0s/pkg/kubernetes"
 	"github.com/sirupsen/logrus"
 )
 
-var _ component.Component = (*Autopilot)(nil)
+var _ manager.Component = (*Autopilot)(nil)
 
 type Autopilot struct {
 	K0sVars            constant.CfgVars
@@ -41,7 +42,7 @@ func (a *Autopilot) Init(ctx context.Context) error {
 	return nil
 }
 
-func (a *Autopilot) Run(ctx context.Context) error {
+func (a *Autopilot) Start(ctx context.Context) error {
 	log := logrus.WithFields(logrus.Fields{"component": "autopilot"})
 
 	autopilotClientFactory, err := apcli.NewClientFactory(a.AdminClientFactory.GetRESTConfig())
@@ -56,7 +57,7 @@ func (a *Autopilot) Run(ctx context.Context) error {
 		ManagerPort:         8899,
 		MetricsBindAddr:     "0",
 		HealthProbeBindAddr: "0",
-	}, logrus.WithFields(logrus.Fields{"component": "autopilot"}), a.EnableWorker, autopilotClientFactory)
+	}, logrus.WithFields(logrus.Fields{"component": "autopilot"}), a.EnableWorker, a.AdminClientFactory, autopilotClientFactory)
 	if err != nil {
 		return fmt.Errorf("failed to create autopilot controller: %w", err)
 	}
@@ -71,9 +72,5 @@ func (a *Autopilot) Run(ctx context.Context) error {
 }
 
 func (a *Autopilot) Stop() error {
-	return nil
-}
-
-func (a *Autopilot) Healthy() error {
 	return nil
 }

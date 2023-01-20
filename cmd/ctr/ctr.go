@@ -13,17 +13,22 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package ctr
 
 import (
+	"fmt"
 	"os"
 	"path"
 
-	"github.com/containerd/containerd/cmd/ctr/app"
 	"github.com/k0sproject/k0s/pkg/config"
+
+	"github.com/containerd/containerd/cmd/ctr/app"
 	"github.com/spf13/cobra"
 	"github.com/urfave/cli"
 )
+
+const pathEnv = "PATH"
 
 func NewCtrCommand() *cobra.Command {
 	containerdCtr := app.New()
@@ -36,6 +41,10 @@ func NewCtrCommand() *cobra.Command {
 		DisableFlagParsing: true,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			args := extractCtrCommand(os.Args)
+			newPath := fmt.Sprintf("%s%s%s", config.GetCmdOpts().K0sVars.BinDir,
+				string(os.PathListSeparator),
+				os.Getenv(pathEnv))
+			os.Setenv(pathEnv, newPath)
 			return containerdCtr.Run(args)
 		},
 	}

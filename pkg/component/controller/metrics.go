@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package controller
 
 import (
@@ -29,7 +30,7 @@ import (
 
 	"github.com/k0sproject/k0s/internal/pkg/templatewriter"
 	"github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
-	"github.com/k0sproject/k0s/pkg/component"
+	"github.com/k0sproject/k0s/pkg/component/manager"
 	"github.com/k0sproject/k0s/pkg/constant"
 	"github.com/k0sproject/k0s/pkg/kubernetes"
 	"github.com/sirupsen/logrus"
@@ -54,8 +55,8 @@ type Metrics struct {
 	jobs          []*job
 }
 
-var _ component.Component = (*Metrics)(nil)
-var _ component.ReconcilerComponent = (*Metrics)(nil)
+var _ manager.Component = (*Metrics)(nil)
+var _ manager.Reconciler = (*Metrics)(nil)
 
 // NewMetrics creates new Metrics reconciler
 func NewMetrics(k0sVars constant.CfgVars, saver manifestsSaver, clientCF kubernetes.ClientFactoryInterface) (*Metrics, error) {
@@ -98,7 +99,7 @@ func (m *Metrics) Init(_ context.Context) error {
 }
 
 // Run runs the metric server reconciler
-func (m *Metrics) Run(ctx context.Context) error {
+func (m *Metrics) Start(ctx context.Context) error {
 	ctx, m.tickerDone = context.WithCancel(ctx)
 
 	for _, j := range m.jobs {
@@ -148,9 +149,6 @@ func (m *Metrics) Reconcile(_ context.Context, clusterConfig *v1beta1.ClusterCon
 	m.clusterConfig = clusterConfig
 	return nil
 }
-
-// Healthy is the health-check interface
-func (m *Metrics) Healthy() error { return nil }
 
 type job struct {
 	log logrus.FieldLogger

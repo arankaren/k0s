@@ -18,6 +18,8 @@ k0s/containerd uses OCI (Open Container Initiative) bundles for airgap installat
 
 k0s offers two methods for creating OCI bundles, one using Docker and the other using a previously set up k0s worker. Be aware, though, that you cannot use the Docker method for the ARM architectures due to [kube-proxy image multiarch manifest problem](https://github.com/kubernetes/kubernetes/issues/98229).
 
+**Note:** k0s strictly matches image architecture, e.g. arm/v7 images won't work for arm64.
+
 ### Docker
 
 1. Pull the images.
@@ -64,7 +66,7 @@ metadata:
   name: k0s-cluster
 spec:
   k0s:
-    version: 1.21.3+k0s.0
+    version: 1.26.0+k0s.0
   hosts:
     - role: controller
       ssh:

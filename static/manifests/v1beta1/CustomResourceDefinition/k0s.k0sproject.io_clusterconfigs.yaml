@@ -186,6 +186,11 @@ spec:
                         type: string
                     type: object
                   default_pull_policy:
+                    default: IfNotPresent
+                    enum:
+                    - Always
+                    - IfNotPresent
+                    - Never
                     type: string
                   konnectivity:
                     description: ImageSpec container image settings
@@ -266,12 +271,18 @@ spec:
                 description: KonnectivitySpec defines the requested state for Konnectivity
                 properties:
                   adminPort:
+                    default: 8133
                     description: admin port to listen on (default 8133)
-                    format: int64
+                    format: int32
+                    maximum: 65535
+                    minimum: 1
                     type: integer
                   agentPort:
+                    default: 8132
                     description: agent port to listen on (default 8132)
-                    format: int64
+                    format: int32
+                    maximum: 65535
+                    minimum: 1
                     type: integer
                 type: object
               network:
@@ -280,6 +291,12 @@ spec:
                   calico:
                     description: Calico defines the calico related config options
                     properties:
+                      envVars:
+                        additionalProperties:
+                          type: string
+                        description: Environment variables to configure Calico node
+                          (see https://docs.projectcalico.org/reference/node/configuration)
+                        type: object
                       flexVolumeDriverPath:
                         description: 'The host path for Calicos flex-volume-driver(default:
                           /usr/libexec/k0s/kubelet-plugins/volume/exec/nodeagent~uds)'
@@ -333,6 +350,47 @@ spec:
                     properties:
                       disabled:
                         type: boolean
+                      iptables:
+                        description: KubeProxyIPTablesConfiguration contains iptables-related
+                          kube-proxy configuration @see https://github.com/kubernetes/kube-proxy/blob/master/config/v1alpha1/types.go#L26
+                        properties:
+                          localhostNodePorts:
+                            type: boolean
+                          masqueradeAll:
+                            type: boolean
+                          masqueradeBit:
+                            format: int32
+                            type: integer
+                          minSyncPeriod:
+                            type: string
+                          syncPeriod:
+                            type: string
+                        type: object
+                      ipvs:
+                        description: KubeProxyIPVSConfiguration contains ipvs-related
+                          kube-proxy configuration @see https://github.com/kubernetes/kube-proxy/blob/master/config/v1alpha1/types.go#L45
+                        properties:
+                          excludeCIDRs:
+                            items:
+                              type: string
+                            type: array
+                          minSyncPeriod:
+                            type: string
+                          scheduler:
+                            type: string
+                          strictARP:
+                            type: boolean
+                          syncPeriod:
+                            type: string
+                          tcpFinTimeout:
+                            type: string
+                          tcpTimeout:
+                            type: string
+                          udpTimeout:
+                            type: string
+                        type: object
+                      metricsBindAddress:
+                        type: string
                       mode:
                         type: string
                     type: object
@@ -343,6 +401,29 @@ spec:
                       autoMTU:
                         description: 'Auto-detection of used MTU (default: true)'
                         type: boolean
+                      hairpin:
+                        default: Enabled
+                        description: 'Admits three values: "Enabled" enables it globally,
+                          "Allowed" allows but services must be annotated explicitly
+                          and "Disabled" Defaults to "Enabled"'
+                        enum:
+                        - Enabled
+                        - Allowed
+                        - Disabled
+                        type: string
+                      hairpinMode:
+                        description: 'DEPRECATED: Use hairpin instead. Activates Hairpin
+                          Mode (allow a Pod behind a Service to communicate to its
+                          own ClusterIP:Port)'
+                        type: boolean
+                      ipMasq:
+                        description: 'IP masquerade for traffic originating from the
+                          pod network, and destined outside of it (default: false)'
+                        type: boolean
+                      metricsPort:
+                        description: 'Kube-router metrics server port. Set to 0 to
+                          disable metrics  (default: 8080)'
+                        type: integer
                       mtu:
                         description: Override MTU setting (autoMTU must be set to
                           false)
@@ -354,6 +435,70 @@ spec:
                         description: Comma-separated list of global peer ASNs
                         type: string
                     type: object
+                  nodeLocalLoadBalancing:
+                    description: 'nodeLocalLoadBalancing defines the configuration
+                      options related to k0s''s node-local load balancing feature.
+                      NOTE: This feature is experimental, and currently unsupported
+                      on ARMv7!'
+                    properties:
+                      enabled:
+                        description: 'enabled indicates if node-local load balancing
+                          should be used to access Kubernetes API servers from worker
+                          nodes. Default: false'
+                        type: boolean
+                      envoyProxy:
+                        description: envoyProxy contains configuration options related
+                          to the "EnvoyProxy" type of load balancing.
+                        properties:
+                          apiServerBindPort:
+                            default: 7443
+                            description: 'apiServerBindPort is the port number on
+                              which to bind the Envoy load balancer for the Kubernetes
+                              API server to on a worker''s loopback interface. This
+                              must be a valid port number, 0 < x < 65536. Default:
+                              7443'
+                            format: int32
+                            maximum: 65535
+                            minimum: 1
+                            type: integer
+                          image:
+                            description: image specifies the OCI image that's being
+                              used for the Envoy Pod.
+                            properties:
+                              image:
+                                type: string
+                              version:
+                                type: string
+                            type: object
+                          imagePullPolicy:
+                            description: imagePullPolicy specifies the pull policy
+                              being used for the Envoy Pod. Defaults to the default
+                              image pull policy.
+                            enum:
+                            - Always
+                            - Never
+                            - IfNotPresent
+                            type: string
+                          konnectivityServerBindPort:
+                            default: 7132
+                            description: 'konnectivityServerBindPort is the port number
+                              on which to bind the Envoy load balancer for the konnectivity
+                              server to on a worker''s loopback interface. This must
+                              be a valid port number, 0 < x < 65536. Default: 7132'
+                            format: int32
+                            maximum: 65535
+                            minimum: 1
+                            type: integer
+                        type: object
+                      type:
+                        default: EnvoyProxy
+                        description: type indicates the type of the node-local load
+                          balancer to deploy on worker nodes. Currently, the only
+                          supported type is "EnvoyProxy".
+                        enum:
+                        - EnvoyProxy
+                        type: string
+                    type: object
                   podCIDR:
                     description: Pod network CIDR to use in the cluster
                     type: string
@@ -363,14 +508,6 @@ spec:
                     type: string
                   serviceCIDR:
                     description: Network CIDR to use for cluster VIP services
-                    type: string
-                type: object
-              podSecurityPolicy:
-                description: PodSecurityPolicy defines the config options for setting
-                  system level default PSP
-                properties:
-                  defaultPolicy:
-                    description: default PSP for the cluster (00-k0s-privileged/99-k0s-restricted)
                     type: string
                 type: object
               scheduler:
@@ -415,6 +552,12 @@ spec:
                             description: EtcdPrefix is a prefix to prepend to all
                               resource paths in etcd
                             type: string
+                        type: object
+                      extraArgs:
+                        additionalProperties:
+                          type: string
+                        description: Map of key-values (strings) for any extra arguments
+                          you want to pass down to the etcd process
                         type: object
                       peerAddress:
                         description: Node address used for etcd cluster peering

@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package stop
 
 import (
@@ -20,6 +21,7 @@ import (
 	"os"
 
 	"github.com/k0sproject/k0s/pkg/install"
+
 	"github.com/kardianos/service"
 	"github.com/spf13/cobra"
 )

@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package dir
 
 import (
@@ -57,10 +58,6 @@ func Init(path string, perm os.FileMode) error {
 
 // Copy copies the content of a folder
 func Copy(src string, dst string) error {
-	cmd := exec.Command("cp", "-r", src, dst)
-	err := cmd.Run()
-	if err != nil {
-		return err
-	}
-	return nil
+	cmd := exec.Command("cp", "-r", "--", src, dst)
+	return cmd.Run()
 }

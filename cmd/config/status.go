@@ -13,23 +13,25 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package config
 
 import (
 	"os"
 
 	"github.com/k0sproject/k0s/pkg/config"
+
 	"github.com/spf13/cobra"
 )
 
-var outputFormat string
-
 func NewStatusCmd() *cobra.Command {
+	var outputFormat string
+
 	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "Display dynamic configuration reconciliation status",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			c := CmdOpts(config.GetCmdOpts())
+			c := config.GetCmdOpts()
 			os.Args = []string{os.Args[0], "kubectl", "--data-dir", c.K0sVars.DataDir, "-n", "kube-system", "get", "event", "--field-selector", "involvedObject.name=k0s"}
 			if outputFormat != "" {
 				os.Args = append(os.Args, "-o", outputFormat)

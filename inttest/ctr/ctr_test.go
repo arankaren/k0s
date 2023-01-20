@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package ctr
 
 import (
@@ -34,29 +35,29 @@ func (s *CtrSuite) TestK0sCtrCommand() {
 	s.Require().NoError(err)
 	defer ssh.Disconnect()
 
-	_, err = ssh.ExecWithOutput("/usr/local/bin/k0s install controller --enable-worker")
+	_, err = ssh.ExecWithOutput(s.Context(), "/usr/local/bin/k0s install controller --enable-worker")
 	s.Require().NoError(err)
 
-	_, err = ssh.ExecWithOutput("/usr/local/bin/k0s start")
+	_, err = ssh.ExecWithOutput(s.Context(), "/usr/local/bin/k0s start")
 	s.Require().NoError(err)
 
 	err = s.WaitForKubeAPI(s.ControllerNode(0))
 	s.Require().NoError(err)
 
 	kc, err := s.KubeClient(s.ControllerNode(0))
-	s.NoError(err)
+	s.Require().NoError(err)
 
 	err = s.WaitForNodeReady(s.ControllerNode(0), kc)
 	s.NoError(err)
 
-	output, err := ssh.ExecWithOutput("/usr/local/bin/k0s ctr namespaces list 2>/dev/null")
+	output, err := ssh.ExecWithOutput(s.Context(), "/usr/local/bin/k0s ctr namespaces list 2>/dev/null")
 	s.Require().NoError(err)
 
 	flatOutput := removeRedundantSpaces(output)
 	errMsg := fmt.Sprintf("returned output of command 'k0s ctr namespaces list' is different than expected: %s", output)
 	s.Equal("NAME LABELS k8s.io", flatOutput, errMsg)
 
-	output, err = ssh.ExecWithOutput("/usr/local/bin/k0s ctr version")
+	output, err = ssh.ExecWithOutput(s.Context(), "/usr/local/bin/k0s ctr version")
 	s.Require().NoError(err)
 	s.Require().NotContains(output, "WARNING")
 }

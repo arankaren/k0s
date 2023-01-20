@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package status
 
 import (
@@ -22,34 +23,59 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/k0sproject/k0s/internal/pkg/dir"
-	"github.com/k0sproject/k0s/pkg/component"
-	"github.com/k0sproject/k0s/pkg/install"
+	"github.com/k0sproject/k0s/pkg/autopilot/client"
+	"github.com/k0sproject/k0s/pkg/component/manager"
+	"github.com/k0sproject/k0s/pkg/component/prober"
 	"github.com/sirupsen/logrus"
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 )
 
+type Stater interface {
+	State(maxCount int) prober.State
+}
 type Status struct {
-	StatusInformation install.K0sStatus
+	StatusInformation K0sStatus
+	Prober            Stater
 	Socket            string
 	L                 *logrus.Entry
 	httpserver        http.Server
 	listener          net.Listener
+	CertManager       certManager
 }
 
-var _ component.Component = (*Status)(nil)
+type certManager interface {
+	GetRestConfig() (*rest.Config, error)
+}
 
-// Healthy dummy implementation
-func (s *Status) Healthy() error { return nil }
+var _ manager.Component = (*Status)(nil)
+
+const defaultMaxEvents = 5
 
 // Init initializes component
 func (s *Status) Init(_ context.Context) error {
 	s.L = logrus.WithFields(logrus.Fields{"component": "status"})
-
+	mux := http.NewServeMux()
+	mux.Handle("/status", &statusHandler{Status: s})
+	mux.HandleFunc("/components", func(w http.ResponseWriter, r *http.Request) {
+		maxCount, err := strconv.ParseInt(r.URL.Query().Get("maxCount"), 10, 32)
+		if err != nil {
+			maxCount = defaultMaxEvents
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if json.NewEncoder(w).Encode(s.Prober.State(int(maxCount))) != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	})
 	var err error
 	s.httpserver = http.Server{
-		Handler: &statusHandler{Status: s},
+		Handler: mux,
 	}
 	err = dir.Init(s.StatusInformation.K0sVars.RunDir, 0755)
 	if err != nil {
@@ -75,8 +101,8 @@ func removeLeftovers(socket string) {
 	}
 }
 
-// Run runs the component
-func (s *Status) Run(_ context.Context) error {
+// Start runs the component
+func (s *Status) Start(_ context.Context) error {
 	go func() {
 		if err := s.httpserver.Serve(s.listener); err != nil && err != http.ErrServerClosed {
 			s.L.Errorf("failed to start status server at %s: %s", s.Socket, err)
@@ -92,17 +118,74 @@ func (s *Status) Stop() error {
 	if err := s.httpserver.Shutdown(ctx); err != nil && err != context.Canceled {
 		return err
 	}
-	return os.Remove(s.Socket)
+	// Unix socket doesn't need to be explicitly removed because it's hadled
+	// by httpserver.Shutdown
+	return nil
 }
 
 type statusHandler struct {
 	Status *Status
+	client kubernetes.Interface
 }
 
 // ServerHTTP implementation of handler interface
 func (sh *statusHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	statusInfo := sh.getCurrentStatus(r.Context())
+
 	w.Header().Set("Content-Type", "application/json")
-	if json.NewEncoder(w).Encode(sh.Status.StatusInformation) != nil {
+	if json.NewEncoder(w).Encode(statusInfo) != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 	}
+}
+
+const (
+	defaultPollDuration = 1 * time.Second
+	defaultPollTimeout  = 5 * time.Minute
+)
+
+func (sh *statusHandler) getCurrentStatus(ctx context.Context) K0sStatus {
+	status := sh.Status.StatusInformation
+	if !status.Workloads {
+		return status
+	}
+
+	if sh.client == nil {
+		kubeClient, err := sh.buildWorkerSideKubeAPIClient(ctx)
+		if err != nil {
+			status.WorkerToAPIConnectionStatus.Message = fmt.Errorf("failed to create kube-api client required for kube-api status reports, probably kubelet failed to init: %v", err).Error()
+			return status
+		}
+		sh.client = kubeClient
+	}
+	_, err := sh.client.CoreV1().Nodes().List(context.Background(), v1.ListOptions{})
+	if err != nil {
+		status.WorkerToAPIConnectionStatus.Message = err.Error()
+		return status
+	}
+	status.WorkerToAPIConnectionStatus.Success = true
+	return status
+}
+
+func (sh *statusHandler) buildWorkerSideKubeAPIClient(ctx context.Context) (kubernetes.Interface, error) {
+	var restConfig *rest.Config
+	var err error
+	timeout, cancel := context.WithTimeout(ctx, defaultPollTimeout)
+	defer cancel()
+	if err := wait.PollUntilWithContext(timeout, defaultPollDuration, func(ctx context.Context) (done bool, err error) {
+		if restConfig, err = sh.Status.CertManager.GetRestConfig(); err != nil {
+			return false, nil
+		}
+		return true, nil
+	}); err != nil {
+		return nil, err
+	}
+	factory, err := client.NewClientFactory(restConfig)
+	if err != nil {
+		return nil, err
+	}
+	client, err := factory.GetClient()
+	if err != nil {
+		return nil, err
+	}
+	return client, nil
 }

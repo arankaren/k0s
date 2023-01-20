@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package iface
 
 import (
@@ -24,8 +25,19 @@ import (
 
 // AllAddresses returns a list of all network addresses on a node
 func AllAddresses() ([]string, error) {
-	addresses := make([]string, 0, 5)
+	addresses, err := CollectAllIPs()
+	if err != nil {
+		return nil, err
+	}
+	strings := make([]string, len(addresses))
+	for i, addr := range addresses {
+		strings[i] = addr.String()
+	}
+	return strings, nil
+}
 
+// CollectAllIPs returns a list of all network addresses on a node
+func CollectAllIPs() (addresses []net.IP, err error) {
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
 		return nil, fmt.Errorf("failed to list network interfaces: %w", err)
@@ -35,12 +47,10 @@ func AllAddresses() ([]string, error) {
 		// check the address type and skip if loopback
 		if ipnet, ok := a.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
 			if ipnet.IP.To4() != nil || ipnet.IP.To16() != nil {
-				addresses = append(addresses, ipnet.IP.String())
+				addresses = append(addresses, ipnet.IP)
 			}
 		}
 	}
-
-	logrus.Debugf("found local addresses: %s", addresses)
 
 	return addresses, nil
 }

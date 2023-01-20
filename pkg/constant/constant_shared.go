@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package constant
 
 import (
@@ -54,11 +55,10 @@ const (
 	PidFileMode = 0644
 	// ManifestsDirMode is the expected directory permissions for ManifestsDir
 	ManifestsDirMode = 0755
-
 	// KineDBDirMode is the expected directory permissions for the Kine DB
 	KineDBDirMode = 0750
 
-	// User accounts for services
+	/* User accounts for services */
 
 	// EtcdUser defines the user to use for running etcd process
 	EtcdUser = "etcd"
@@ -70,44 +70,49 @@ const (
 	SchedulerUser = "kube-scheduler"
 	// KonnectivityServerUser deinfes the user to use for konnectivity-server
 	KonnectivityServerUser = "konnectivity-server"
+
 	// KubernetesMajorMinorVersion defines the current embedded major.minor version info
-	KubernetesMajorMinorVersion = "1.24"
-	// DefaultPSP defines the system level default PSP to apply
-	DefaultPSP = "00-k0s-privileged"
-	// Image Constants
+	KubernetesMajorMinorVersion = "1.26"
+
+	/* Image Constants */
+
 	KonnectivityImage                  = "quay.io/k0sproject/apiserver-network-proxy-agent"
-	KonnectivityImageVersion           = "0.0.31-k0s"
+	KonnectivityImageVersion           = "0.0.33-k0s"
 	PushGatewayImage                   = "quay.io/k0sproject/pushgateway-ttl"
 	PushGatewayImageVersion            = "edge@sha256:7031f6bf6c957e2fdb496161fe3bea0a5bde3de800deeba7b2155187196ecbd9"
-	MetricsImage                       = "k8s.gcr.io/metrics-server/metrics-server"
-	MetricsImageVersion                = "v0.5.2"
-	KubeProxyImage                     = "k8s.gcr.io/kube-proxy"
-	KubeProxyImageVersion              = "v1.24.3"
-	CoreDNSImage                       = "k8s.gcr.io/coredns/coredns"
-	CoreDNSImageVersion                = "v1.7.0"
+	MetricsImage                       = "registry.k8s.io/metrics-server/metrics-server"
+	MetricsImageVersion                = "v0.6.2"
+	KubeProxyImage                     = "registry.k8s.io/kube-proxy"
+	KubeProxyImageVersion              = "v1.26.0"
+	CoreDNSImage                       = "docker.io/coredns/coredns"
+	CoreDNSImageVersion                = "1.10.0"
+	EnvoyProxyImage                    = "docker.io/envoyproxy/envoy-distroless"
+	EnvoyProxyImageVersion             = "v1.24.1"
 	CalicoImage                        = "docker.io/calico/cni"
-	CalicoComponentImagesVersion       = "v3.23.1"
+	CalicoComponentImagesVersion       = "v3.24.5"
 	CalicoNodeImage                    = "docker.io/calico/node"
 	KubeControllerImage                = "docker.io/calico/kube-controllers"
 	KubeRouterCNIImage                 = "docker.io/cloudnativelabs/kube-router"
-	KubeRouterCNIImageVersion          = "v1.4.0"
+	KubeRouterCNIImageVersion          = "v1.5.1"
 	KubeRouterCNIInstallerImage        = "quay.io/k0sproject/cni-node"
 	KubeRouterCNIInstallerImageVersion = "1.1.1-k0s.0"
 	OpenEBSRepository                  = "https://openebs.github.io/charts"
-	OpenEBSVersion                     = "3.0.3"
+	OpenEBSVersion                     = "3.3.0"
 
-	// Controller component names
+	/* Controller component names */
+
 	APIConfigComponentName             = "api-config"
+	APIEndpointReconcilerComponentName = "endpoint-reconciler"
 	ControlAPIComponentName            = "control-api"
 	CoreDNSComponentname               = "coredns"
 	CsrApproverComponentName           = "csr-approver"
-	DefaultPspComponentName            = "default-psp"
 	HelmComponentName                  = "helm"
 	KonnectivityServerComponentName    = "konnectivity-server"
 	KubeControllerManagerComponentName = "kube-controller-manager"
 	KubeProxyComponentName             = "kube-proxy"
 	KubeSchedulerComponentName         = "kube-scheduler"
-	KubeletConfigComponentName         = "kubelet-config"
+	KubeletConfigComponentName         = "kubelet-config" // Deprecated: replaced by worker-config
+	WorkerConfigComponentName          = "worker-config"
 	MetricsServerComponentName         = "metrics-server"
 	NetworkProviderComponentName       = "network-provider"
 	SystemRbacComponentName            = "system-rbac"
@@ -134,7 +139,6 @@ type CfgVars struct {
 	KineSocketPath             string // The unix socket path for kine
 	KonnectivitySocketDir      string // location of konnectivity's socket path
 	KubeletAuthConfigPath      string // KubeletAuthConfigPath defines the default kubelet auth config path
-	KubeletBootstrapConfigPath string // KubeletBootstrapConfigPath defines the default path for kubelet bootstrap auth config
 	KubeletVolumePluginDir     string // location for kubelet plugins volume executables
 	ManifestsDir               string // location for all stack manifests
 	RunDir                     string // location of supervised pid files and sockets
@@ -187,7 +191,6 @@ func GetConfig(dataDir string) CfgVars {
 		KineSocketPath:             formatPath(runDir, KineSocket),
 		KonnectivitySocketDir:      formatPath(runDir, "konnectivity-server"),
 		KubeletAuthConfigPath:      formatPath(dataDir, "kubelet.conf"),
-		KubeletBootstrapConfigPath: formatPath(dataDir, "kubelet-bootstrap.conf"),
 		KubeletVolumePluginDir:     KubeletVolumePluginDir,
 		ManifestsDir:               formatPath(dataDir, "manifests"),
 		RunDir:                     runDir,

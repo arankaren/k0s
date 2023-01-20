@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package controller
 
 import (
@@ -30,21 +31,22 @@ import (
 	"github.com/k0sproject/k0s/internal/pkg/users"
 	"github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
 	"github.com/k0sproject/k0s/pkg/assets"
-	"github.com/k0sproject/k0s/pkg/component"
+	"github.com/k0sproject/k0s/pkg/component/manager"
 	"github.com/k0sproject/k0s/pkg/constant"
 	"github.com/k0sproject/k0s/pkg/supervisor"
 )
 
 // Manager implement the component interface to run kube scheduler
 type Manager struct {
-	gid            int
-	K0sVars        constant.CfgVars
-	LogLevel       string
+	K0sVars               constant.CfgVars
+	LogLevel              string
+	SingleNode            bool
+	ServiceClusterIPRange string
+	ExtraArgs             string
+
 	supervisor     *supervisor.Supervisor
-	uid            int
+	uid, gid       int
 	previousConfig stringmap.StringMap
-	SingleNode     bool
-	ExtraArgs      string
 }
 
 var cmDefaultArgs = stringmap.StringMap{
@@ -57,8 +59,8 @@ var cmDefaultArgs = stringmap.StringMap{
 	"use-service-account-credentials": "true",
 }
 
-var _ component.Component = (*Manager)(nil)
-var _ component.ReconcilerComponent = (*Manager)(nil)
+var _ manager.Component = (*Manager)(nil)
+var _ manager.Reconciler = (*Manager)(nil)
 
 // Init extracts the needed binaries
 func (a *Manager) Init(_ context.Context) error {
@@ -78,7 +80,7 @@ func (a *Manager) Init(_ context.Context) error {
 }
 
 // Run runs kube Manager
-func (a *Manager) Run(_ context.Context) error { return nil }
+func (a *Manager) Start(_ context.Context) error { return nil }
 
 // Reconcile detects changes in configuration and applies them to the component
 func (a *Manager) Reconcile(_ context.Context, clusterConfig *v1beta1.ClusterConfig) error {
@@ -96,7 +98,7 @@ func (a *Manager) Reconcile(_ context.Context, clusterConfig *v1beta1.ClusterCon
 		"root-ca-file":                     path.Join(a.K0sVars.CertRootDir, "ca.crt"),
 		"service-account-private-key-file": path.Join(a.K0sVars.CertRootDir, "sa.key"),
 		"cluster-cidr":                     clusterConfig.Spec.Network.BuildPodCIDR(),
-		"service-cluster-ip-range":         clusterConfig.Spec.Network.BuildServiceCIDR(clusterConfig.Spec.API.Address),
+		"service-cluster-ip-range":         a.ServiceClusterIPRange,
 		"profiling":                        "false",
 		"terminated-pod-gc-threshold":      "12500",
 		"v":                                a.LogLevel,
@@ -116,13 +118,10 @@ func (a *Manager) Reconcile(_ context.Context, clusterConfig *v1beta1.ClusterCon
 		args["node-cidr-mask-size"] = "24"
 	}
 	for name, value := range clusterConfig.Spec.ControllerManager.ExtraArgs {
-		if args[name] != "" {
+		if _, ok := args[name]; ok {
 			logger.Warnf("overriding kube-controller-manager flag with user provided value: %s", name)
 		}
 		args[name] = value
-	}
-	if clusterConfig.Spec.Network.DualStack.Enabled {
-		args = v1beta1.EnableFeatureGate(args, v1beta1.DualStackFeatureGate)
 	}
 	for name, value := range cmDefaultArgs {
 		if args[name] == "" {
@@ -168,6 +167,3 @@ func (a *Manager) Stop() error {
 	}
 	return nil
 }
-
-// Health-check interface
-func (a *Manager) Healthy() error { return nil }
