@@ -1,5 +1,5 @@
 /*
-Copyright 2022 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -32,7 +32,7 @@ import (
 
 	"github.com/k0sproject/k0s/internal/pkg/dir"
 	"github.com/k0sproject/k0s/internal/pkg/templatewriter"
-	"github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
+	"github.com/k0sproject/k0s/pkg/apis/k0s/v1beta1"
 	"github.com/k0sproject/k0s/pkg/constant"
 	k8sutil "github.com/k0sproject/k0s/pkg/kubernetes"
 )
@@ -251,10 +251,12 @@ var _ manager.Reconciler = (*CoreDNS)(nil)
 
 // CoreDNS is the component implementation to manage CoreDNS
 type CoreDNS struct {
+	K0sVars    constant.CfgVars
+	NodeConfig *v1beta1.ClusterConfig
+
 	client                 kubernetes.Interface
 	log                    *logrus.Entry
 	manifestDir            string
-	K0sVars                constant.CfgVars
 	previousConfig         coreDNSConfig
 	stopFunc               context.CancelFunc
 	lastKnownClusterConfig *v1beta1.ClusterConfig
@@ -269,7 +271,7 @@ type coreDNSConfig struct {
 }
 
 // NewCoreDNS creates new instance of CoreDNS component
-func NewCoreDNS(k0sVars constant.CfgVars, clientFactory k8sutil.ClientFactoryInterface) (*CoreDNS, error) {
+func NewCoreDNS(k0sVars constant.CfgVars, clientFactory k8sutil.ClientFactoryInterface, nodeConfig *v1beta1.ClusterConfig) (*CoreDNS, error) {
 	manifestDir := path.Join(k0sVars.ManifestsDir, "coredns")
 
 	client, err := clientFactory.GetClient()
@@ -282,6 +284,7 @@ func NewCoreDNS(k0sVars constant.CfgVars, clientFactory k8sutil.ClientFactoryInt
 		log:         log,
 		K0sVars:     k0sVars,
 		manifestDir: manifestDir,
+		NodeConfig:  nodeConfig,
 	}, nil
 }
 
@@ -319,7 +322,7 @@ func (c *CoreDNS) Start(ctx context.Context) error {
 }
 
 func (c *CoreDNS) getConfig(ctx context.Context, clusterConfig *v1beta1.ClusterConfig) (coreDNSConfig, error) {
-	dns, err := clusterConfig.Spec.Network.DNSAddress()
+	dns, err := c.NodeConfig.Spec.Network.DNSAddress()
 	if err != nil {
 		return coreDNSConfig{}, err
 	}

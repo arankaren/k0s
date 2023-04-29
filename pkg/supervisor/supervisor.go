@@ -1,5 +1,5 @@
 /*
-Copyright 2022 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -58,7 +59,7 @@ type Supervisor struct {
 
 	cmd            *exec.Cmd
 	done           chan bool
-	log            *logrus.Entry
+	log            logrus.FieldLogger
 	mutex          sync.Mutex
 	startStopMutex sync.Mutex
 	cancel         context.CancelFunc
@@ -84,10 +85,28 @@ func (s *Supervisor) processWaitQuit(ctx context.Context) bool {
 	select {
 	case <-ctx.Done():
 		for {
-			s.log.Infof("Shutting down pid %d", s.cmd.Process.Pid)
-			err := s.cmd.Process.Signal(syscall.SIGTERM)
-			if err != nil {
-				s.log.Warnf("Failed to send SIGTERM to pid %d: %s", s.cmd.Process.Pid, err)
+			if runtime.GOOS == "windows" {
+				// Graceful shutdown not implemented on Windows. This requires
+				// attaching to the target process's console and generating a
+				// CTRL+BREAK (or CTRL+C) event. Since a process can only be
+				// attached to a single console at a time, this would require
+				// k0s to detach from its own console, which is definitely not
+				// something that k0s wants to do. There might be ways to do
+				// this by generating the event via a separate helper process,
+				// but that's left open here as a TODO.
+				// https://learn.microsoft.com/en-us/windows/console/freeconsole
+				// https://learn.microsoft.com/en-us/windows/console/attachconsole
+				// https://learn.microsoft.com/en-us/windows/console/generateconsolectrlevent
+				// https://learn.microsoft.com/en-us/windows/console/ctrl-c-and-ctrl-break-signals
+				s.log.Infof("Killing pid %d", s.cmd.Process.Pid)
+				if err := s.cmd.Process.Kill(); err != nil {
+					s.log.Warnf("Failed to kill pid %d: %s", s.cmd.Process.Pid, err)
+				}
+			} else {
+				s.log.Infof("Shutting down pid %d", s.cmd.Process.Pid)
+				if err := s.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+					s.log.Warnf("Failed to send SIGTERM to pid %d: %s", s.cmd.Process.Pid, err)
+				}
 			}
 			select {
 			case <-time.After(s.TimeoutStop):
@@ -98,9 +117,9 @@ func (s *Supervisor) processWaitQuit(ctx context.Context) bool {
 		}
 	case err := <-waitresult:
 		if err != nil {
-			s.log.Warn(err)
+			s.log.WithError(err).Warn("Failed to wait for process")
 		} else {
-			s.log.Warnf("Process exited with code: %d", s.cmd.ProcessState.ExitCode())
+			s.log.Warnf("Process exited: %s", s.cmd.ProcessState)
 		}
 	}
 	return false
@@ -163,8 +182,15 @@ func (s *Supervisor) Supervise() error {
 				// get signals sent directly to parent.
 				s.cmd.SysProcAttr = DetachAttr(s.UID, s.GID)
 
-				s.cmd.Stdout = s.log.Writer()
-				s.cmd.Stderr = s.log.Writer()
+				const maxLogChunkLen = 16 * 1024
+				s.cmd.Stdout = &logWriter{
+					log: s.log.WithField("stream", "stdout"),
+					buf: make([]byte, maxLogChunkLen),
+				}
+				s.cmd.Stderr = &logWriter{
+					log: s.log.WithField("stream", "stderr"),
+					buf: make([]byte, maxLogChunkLen),
+				}
 
 				err = s.cmd.Start()
 			}

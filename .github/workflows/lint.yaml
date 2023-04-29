@@ -35,14 +35,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-
-      - name: Prepare build environment
-        run: .github/workflows/prepare-build-env.sh
-
-      - name: Set up Go
-        uses: actions/setup-go@v3
         with:
-          go-version: ${{ env.GO_VERSION }}
+          fetch-depth: 0
 
       - name: Go caches
         uses: actions/cache@v3

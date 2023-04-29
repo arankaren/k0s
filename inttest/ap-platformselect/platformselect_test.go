@@ -1,4 +1,4 @@
-// Copyright 2022 k0s authors
+// Copyright 2021 k0s authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,12 +19,11 @@ import (
 	"testing"
 	"time"
 
-	apv1beta2 "github.com/k0sproject/k0s/pkg/apis/autopilot.k0sproject.io/v1beta2"
-	apcomm "github.com/k0sproject/k0s/pkg/autopilot/common"
 	apconst "github.com/k0sproject/k0s/pkg/autopilot/constant"
 	appc "github.com/k0sproject/k0s/pkg/autopilot/controller/plans/core"
 
 	"github.com/k0sproject/k0s/inttest/common"
+	aptest "github.com/k0sproject/k0s/inttest/common/autopilot"
 
 	"github.com/stretchr/testify/suite"
 )
@@ -36,6 +35,7 @@ type platformSelectSuite struct {
 // SetupTest prepares the controller and filesystem, getting it into a consistent
 // state which we can run tests against.
 func (s *platformSelectSuite) SetupTest() {
+	ctx := s.Context()
 	s.Require().NoError(s.WaitForSSH(s.ControllerNode(0), 2*time.Minute, 1*time.Second))
 
 	s.Require().NoError(s.InitController(0), "--disable-components=metrics-server")
@@ -44,10 +44,8 @@ func (s *platformSelectSuite) SetupTest() {
 	client, err := s.ExtensionsClient(s.ControllerNode(0))
 	s.Require().NoError(err)
 
-	_, perr := apcomm.WaitForCRDByName(s.Context(), client, "plans.autopilot.k0sproject.io", 2*time.Minute)
-	s.Require().NoError(perr)
-	_, cerr := apcomm.WaitForCRDByName(s.Context(), client, "controlnodes.autopilot.k0sproject.io", 2*time.Minute)
-	s.Require().NoError(cerr)
+	s.Require().NoError(aptest.WaitForCRDByName(ctx, client, "plans"))
+	s.Require().NoError(aptest.WaitForCRDByName(ctx, client, "controlnodes"))
 }
 
 // TestApply applies a well-formed `plan` yaml that includes multiple
@@ -95,12 +93,8 @@ spec:
 	// as the binary would fail to run.
 
 	// The plan has enough information to perform a successful update of k0s, so wait for it.
-	plan, err := apcomm.WaitForPlanByName(s.Context(), client, apconst.AutopilotName, 10*time.Minute, func(plan *apv1beta2.Plan) bool {
-		return plan.Status.State == appc.PlanCompleted
-	})
-
+	plan, err := aptest.WaitForPlanState(s.Context(), client, apconst.AutopilotName, appc.PlanCompleted)
 	s.Require().NoError(err)
-	s.Equal(appc.PlanCompleted, plan.Status.State)
 
 	s.Equal(1, len(plan.Status.Commands))
 	cmd := plan.Status.Commands[0]

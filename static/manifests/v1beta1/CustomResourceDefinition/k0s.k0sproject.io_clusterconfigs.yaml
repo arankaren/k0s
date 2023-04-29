@@ -3,8 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.8.0
-  creationTimestamp: null
+    controller-gen.kubebuilder.io/version: v0.11.4
   name: clusterconfigs.k0s.k0sproject.io
 spec:
   group: k0s.k0sproject.io
@@ -98,6 +97,8 @@ spec:
                               type: string
                             namespace:
                               type: string
+                            order:
+                              type: integer
                             timeout:
                               description: A Duration represents the elapsed time
                                 between two instants as an int64 nanosecond count.
@@ -111,6 +112,8 @@ spec:
                               type: string
                           type: object
                         type: array
+                      concurrencyLevel:
+                        type: integer
                       repositories:
                         description: RepositoriesSettings repository settings
                         items:
@@ -145,6 +148,25 @@ spec:
                         type: string
                     type: object
                 type: object
+              featureGates:
+                description: FeatureGates collection of feature gate specs
+                items:
+                  description: FeatureGate specifies single feature gate
+                  properties:
+                    components:
+                      description: Components to use feature gate on, if empty `KubernetesComponents`
+                        is used as the list
+                      items:
+                        type: string
+                      type: array
+                    enabled:
+                      description: Enabled or disabled
+                      type: boolean
+                    name:
+                      description: Name of the feature gate
+                      type: string
+                  type: object
+                type: array
               images:
                 description: ClusterImages sets docker images for addon components
                 properties:
@@ -604,9 +626,3 @@ spec:
     storage: true
     subresources:
       status: {}
-status:
-  acceptedNames:
-    kind: ""
-    plural: ""
-  conditions: []
-  storedVersions: []

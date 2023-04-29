@@ -32,11 +32,11 @@ type CustomCASuite struct {
 
 func (s *CustomCASuite) TestK0sGetsUp() {
 	// Create an custom certificate to prove that k0s manage to work with it
-	ssh, err := s.SSH(s.ControllerNode(0))
+	ssh, err := s.SSH(s.Context(), s.ControllerNode(0))
 	s.Require().NoError(err)
 	defer ssh.Disconnect()
 
-	ssh.Exec(s.Context(), "sh -e", common.SSHStreams{
+	err = ssh.Exec(s.Context(), "sh -e", common.SSHStreams{
 		In: strings.NewReader(fmt.Sprintf(`
 			K0S_PATH=%q
 			IP_ADDRESS=%q
@@ -47,6 +47,7 @@ func (s *CustomCASuite) TestK0sGetsUp() {
 			"$K0S_PATH" token pre-shared --cert /var/lib/k0s/pki/ca.crt --url https://"$IP_ADDRESS":6443/ --out /var/lib/k0s/manifests/test
 		`, s.K0sFullPath, s.GetControllerIPAddress(0))),
 	})
+	s.Require().NoError(err)
 
 	cert, err := ssh.ExecWithOutput(s.Context(), "cat /var/lib/k0s/pki/ca.crt")
 	s.Require().NoError(err)

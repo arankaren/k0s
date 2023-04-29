@@ -22,13 +22,14 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/k0sproject/k0s/internal/pkg/net"
-	"github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
+	"github.com/k0sproject/k0s/pkg/apis/k0s/v1beta1"
 	"github.com/k0sproject/k0s/pkg/component/worker"
 	workerconfig "github.com/k0sproject/k0s/pkg/component/worker/config"
 	"github.com/k0sproject/k0s/pkg/constant"
@@ -342,6 +343,10 @@ func TestReconciler_ConfigMgmt(t *testing.T) {
 			t.Run(test.name, func(t *testing.T) {
 				runtimeDir := t.TempDir()
 				t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
+				expectedMode := 0700
+				if runtime.GOOS == "windows" {
+					expectedMode = 0777 // On Windows, file mode just mimics the read-only flag
+				}
 
 				test.prepare(t, runtimeDir)
 
@@ -353,7 +358,8 @@ func TestReconciler_ConfigMgmt(t *testing.T) {
 				stat, err := os.Stat(nllbDir)
 				require.NoError(t, err)
 				assert.True(t, stat.IsDir())
-				assert.Equal(t, 0700, int(stat.Mode()&fs.ModePerm))
+
+				assert.Equal(t, expectedMode, int(stat.Mode()&fs.ModePerm))
 			})
 		}
 

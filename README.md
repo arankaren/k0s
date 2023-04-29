@@ -59,10 +59,16 @@ If you'd like to try k0s, please jump in to our:
 
 ## Join the Community
 
-- [Community Slack](https://join.slack.com/t/k8slens/shared_invite/zt-wcl8jq3k-68R5Wcmk1o95MLBE5igUDQ) - Request for support and help from the k0s community via Slack (shared Slack channel with Lens).
-- [GitHub Issues](https://github.com/k0sproject/k0s/issues) - Submit your issues and feature requests via GitHub.
+- [Lens Forums] - Request for support and help from the Lens and k0s community.
+- [GitHub Issues] - Submit your issues and feature requests via GitHub.
 
-We welcome your help in building k0s! If you are interested, we invite you to check out the [Contributing Guide](https://docs.k0sproject.io/latest/contributors/overview/) and the [Code of Conduct](https://docs.k0sproject.io/latest/contributors/CODE_OF_CONDUCT/).
+We welcome your help in building k0s! If you are interested, we invite you to
+check out the [Contributing Guide] and the [Code of Conduct].
+
+[Lens Forums]: https://forums.k8slens.dev/
+[GitHub Issues]: https://github.com/k0sproject/k0s/issues
+[Contributing Guide]: https://docs.k0sproject.io/latest/contributors/overview/
+[Code of Conduct]:https://docs.k0sproject.io/latest/contributors/CODE_OF_CONDUCT/
 
 ## Motivation
 

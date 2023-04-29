@@ -1,5 +1,5 @@
 /*
-Copyright 2022 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -24,6 +24,7 @@ import (
 	"runtime"
 	"syscall"
 
+	k0slog "github.com/k0sproject/k0s/internal/pkg/log"
 	"github.com/k0sproject/k0s/internal/pkg/stringmap"
 	"github.com/k0sproject/k0s/internal/pkg/sysinfo"
 	"github.com/k0sproject/k0s/pkg/build"
@@ -57,7 +58,7 @@ func NewWorkerCmd() *cobra.Command {
 	Note: Token can be passed either as a CLI argument or as a flag`,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			logrus.SetOutput(cmd.OutOrStdout())
-			logrus.SetLevel(logrus.InfoLevel)
+			k0slog.SetInfoLevel()
 			return config.CallParentPersistentPreRun(cmd, args)
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -120,9 +121,7 @@ func (c *Command) Start(ctx context.Context) error {
 		return err
 	}
 
-	pr := prober.New()
-	go pr.Run(ctx)
-	componentManager := manager.New(pr)
+	componentManager := manager.New(prober.DefaultProber)
 
 	var staticPods worker.StaticPods
 
@@ -193,6 +192,7 @@ func (c *Command) Start(ctx context.Context) error {
 		}
 
 		componentManager.Add(ctx, &status.Status{
+			Prober: prober.DefaultProber,
 			StatusInformation: status.K0sStatus{
 				Pid:           os.Getpid(),
 				Role:          "worker",

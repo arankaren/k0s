@@ -1,4 +1,4 @@
-// Copyright 2022 k0s authors
+// Copyright 2021 k0s authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,12 +19,11 @@ import (
 	"testing"
 	"time"
 
-	apv1beta2 "github.com/k0sproject/k0s/pkg/apis/autopilot.k0sproject.io/v1beta2"
-	apcomm "github.com/k0sproject/k0s/pkg/autopilot/common"
 	apconst "github.com/k0sproject/k0s/pkg/autopilot/constant"
 	appc "github.com/k0sproject/k0s/pkg/autopilot/controller/plans/core"
 
 	"github.com/k0sproject/k0s/inttest/common"
+	aptest "github.com/k0sproject/k0s/inttest/common/autopilot"
 
 	"github.com/stretchr/testify/suite"
 )
@@ -56,6 +55,7 @@ func (s *quorumSafetySuite) TearDownSuite() {
 // SetupTest prepares the controller and filesystem, getting it into a consistent
 // state which we can run tests against.
 func (s *quorumSafetySuite) SetupTest() {
+	ctx := s.Context()
 	ipAddress := s.GetControllerIPAddress(0)
 	var joinToken string
 
@@ -71,10 +71,8 @@ func (s *quorumSafetySuite) SetupTest() {
 		client, err := s.ExtensionsClient(s.ControllerNode(0))
 		s.Require().NoError(err)
 
-		_, perr := apcomm.WaitForCRDByName(s.Context(), client, "plans.autopilot.k0sproject.io", 2*time.Minute)
-		s.Require().NoError(perr)
-		_, cerr := apcomm.WaitForCRDByName(s.Context(), client, "controlnodes.autopilot.k0sproject.io", 2*time.Minute)
-		s.Require().NoError(cerr)
+		s.Require().NoError(aptest.WaitForCRDByName(ctx, client, "plans"))
+		s.Require().NoError(aptest.WaitForCRDByName(ctx, client, "controlnodes"))
 
 		// With the primary controller running, create the join token for subsequent controllers.
 		if idx == 0 {
@@ -153,12 +151,8 @@ spec:
 
 	// The plan should fail with "InconsistentTargets" due to autopilot detecting that `controller2`
 	// despite existing as a `ControlNode`, does not resolve.
-	plan, err := apcomm.WaitForPlanByName(s.Context(), client, apconst.AutopilotName, 10*time.Minute, func(plan *apv1beta2.Plan) bool {
-		return plan.Status.State == appc.PlanInconsistentTargets
-	})
-
+	_, err = aptest.WaitForPlanState(s.Context(), client, apconst.AutopilotName, appc.PlanInconsistentTargets)
 	s.Require().NoError(err)
-	s.Equal(appc.PlanInconsistentTargets, plan.Status.State)
 }
 
 // TestQuorumSafetySuite sets up a suite using 2 controllers, and runs a specific

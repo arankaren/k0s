@@ -1,5 +1,5 @@
 /*
-Copyright 2022 k0s authors
+Copyright 2021 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,14 +17,17 @@ limitations under the License.
 package constant
 
 import (
+	"crypto/tls"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"golang.org/x/exp/slices"
 	"golang.org/x/tools/go/packages"
 )
 
@@ -44,6 +47,19 @@ func TestConstants(t *testing.T) {
 		kubeMajorMinor := ver[0] + "." + ver[1]
 		assert.Equal(t, kubeMajorMinor, KubernetesMajorMinorVersion)
 	})
+}
+
+func TestTLSCipherSuites(t *testing.T) {
+	// Verify that the ciphers in use are still considered secure by Go.
+	cipherSuites := tls.CipherSuites()
+	for _, cipherSuite := range AllowedTLS12CipherSuiteIDs {
+		idx := slices.IndexFunc(cipherSuites, func(x *tls.CipherSuite) bool {
+			return x.ID == cipherSuite
+		})
+		if idx < 0 {
+			assert.Fail(t, "Not in tls.CipherSuites(), potentially insecure", "(0x%04x) %s", cipherSuite, tls.CipherSuiteName(cipherSuite))
+		}
+	}
 }
 
 func TestKubernetesModuleVersions(t *testing.T) {
@@ -87,23 +103,11 @@ func TestEtcdModuleVersions(t *testing.T) {
 				strings.HasSuffix(modulePath, "/v"+etcdVersionParts[0])
 		},
 		func(t *testing.T, pkgPath string, module *packages.Module) bool {
-			// TODO: Restore the old test behavior once the Go dependencies can
-			// be updated to the current etcd version without opening
-			// dependora's box.
-
-			return !assert.NotEqual(t, "v"+etcdVersion, module.Version,
-				"Module version for package %s matches, consider restoring the old test behavior: %+#v",
-				pkgPath, module,
+			return !assert.Equal(t, "v"+etcdVersion, module.Version,
+				"Module version for package %s doesn't match: %+#v",
 			)
-
-			// return !assert.Equal(t, "v"+etcdVersion, module.Version,
-			// 	"Module version for package %s doesn't match: %+#v",
-			// 	pkgPath, module,
-			// )
 		},
 	)
-
-	t.Skip("This test is skipped until the etcd Go dependencies can be updated to the current version.")
 }
 
 func TestContainerdModuleVersions(t *testing.T) {
@@ -139,14 +143,15 @@ func TestRuncModuleVersions(t *testing.T) {
 }
 
 func getVersion(t *testing.T, component string) string {
-	cmd := exec.Command("./vars.sh", component+"_version")
+	cmd := exec.Command("sh", "./vars.sh", component+"_version")
 	cmd.Dir = filepath.Join("..", "..")
 
 	out, err := cmd.Output()
 	require.NoError(t, err)
 	require.NotEmpty(t, out, "failed to get %s version", component)
 
-	return strings.TrimSuffix(string(out), "\n")
+	trailingNewlines := regexp.MustCompilePOSIX("(\r?\n)+$")
+	return string(trailingNewlines.ReplaceAll(out, []byte{}))
 }
 
 func checkPackageModules(t *testing.T, filter func(modulePath string) bool, check func(t *testing.T, pkgPath string, module *packages.Module) bool) {

@@ -2,7 +2,7 @@
 // +build !windows
 
 /*
-Copyright 2022 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -27,7 +27,7 @@ const (
 	KubeletVolumePluginDir         = "/usr/libexec/k0s/kubelet-plugins/volume/exec"
 	KineSocket                     = "kine/kine.sock:2379"
 	KubePauseContainerImage        = "registry.k8s.io/pause"
-	KubePauseContainerImageVersion = "3.6"
+	KubePauseContainerImageVersion = "3.8"
 	K0sConfigPathDefault           = "/etc/k0s/k0s.yaml"
 )
 

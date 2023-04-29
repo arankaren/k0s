@@ -17,9 +17,9 @@ limitations under the License.
 package kubectl
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"testing"
 
 	"github.com/k0sproject/k0s/inttest/common"
@@ -27,76 +27,163 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
+	"golang.org/x/crypto/ssh"
 )
 
 type KubectlSuite struct {
 	common.FootlooseSuite
 }
 
-const pluginContent = `#!/usr/bin/env sh
+const pluginContent = `#!/bin/sh
 
-echo foo-plugin
+echo "${0##*/}" "$#" "$@"
 `
 
 func (s *KubectlSuite) TestEmbeddedKubectl() {
-	s.Require().NoError(s.InitController(0))
-	s.PutFile(s.ControllerNode(0), "/bin/kubectl-foo", pluginContent)
-
-	ssh, err := s.SSH(s.ControllerNode(0))
+	sshConn, err := s.SSH(s.Context(), s.ControllerNode(0))
 	s.Require().NoError(err, "failed to SSH into controller")
-	defer ssh.Disconnect()
+	defer sshConn.Disconnect()
 
-	_, err = ssh.ExecWithOutput(s.Context(), "chmod +x /bin/kubectl-foo")
-	s.Require().NoError(err)
-	_, err = ssh.ExecWithOutput(s.Context(), "ln -s /usr/local/bin/k0s /usr/bin/kubectl")
-	s.Require().NoError(err)
+	// Create a dummy kubectl plugin for testing
+	s.MakeDir(s.ControllerNode(0), "/inttest/bin")
+	s.PutFile(s.ControllerNode(0), "/inttest/bin/kubectl-foo", pluginContent)
+	// Used to ensure that kubectl plugins don't obstruct regular k0s commands
+	s.PutFile(s.ControllerNode(0), "/inttest/bin/kubectl-airgap", pluginContent)
 
-	s.T().Log("Check that different ways to call kubectl subcommand work")
+	// Create the kubectl symlink and make plugins executable
+	s.Require().NoError(sshConn.Exec(s.Context(), `
+		mkdir /inttest/symlink &&
+		ln -s /usr/local/bin/k0s /inttest/symlink/kubectl &&
+		chmod +x /inttest/bin/kubectl-*
+	`, common.SSHStreams{}))
 
-	callingConventions := []struct {
-		name string
-		cmd  []string
-	}{
-		{"full_subcommand", []string{"/usr/local/bin/k0s", "kubectl"}},
-		{"short_subcommand", []string{"/usr/local/bin/k0s", "kc"}},
-		{"symlink", []string{"/usr/bin/kubectl"}},
+	s.Require().NoError(s.InitController(0))
+
+	type checkFunc func(t *testing.T, stdout, stderr string, err error)
+	type cmdlineTest struct {
+		name    string
+		cmdline string
+		check   checkFunc
 	}
 
-	subcommands := []struct {
-		name  string
-		cmd   []string
-		check func(t *testing.T, output string)
+	commands := []cmdlineTest{
+		// Check that kubectl plugins don't obstruct regular k0s commands
+		{"no_plugins_for_airgap", "%s airgap list-images", func(t *testing.T, stdout, stderr string, err error) {
+			assert.NoError(t, err)
+			assert.NotContains(t, stdout, "kubectl-airgap")
+			assert.Empty(t, stderr)
+		}},
+	}
+
+	kubectlCallingConventions := []struct {
+		name    string
+		cmdline string
 	}{
-		{"plain", nil, func(t *testing.T, output string) {
-			assert.Contains(t, output, `kubectl controls the Kubernetes cluster manager.`)
+		{"full_subcommand", "/usr/local/bin/k0s kubectl"},
+		{"short_subcommand", "/usr/local/bin/k0s kc"},
+		{"symlink", "/inttest/symlink/kubectl"},
+	}
+
+	kubectlCommands := []cmdlineTest{
+		{"plain", "%s", func(t *testing.T, stdout, stderr string, err error) {
+			assert.NoError(t, err)
+			assert.Contains(t, stdout, "kubectl controls the Kubernetes cluster manager.\n")
+			assert.Empty(t, stderr)
 		}},
 
-		{"JSON_version", []string{"version", "--output=json"}, func(t *testing.T, output string) {
+		{"JSON_version", "%s version --output=json", func(t *testing.T, stdout, stderr string, err error) {
+			assert.NoError(t, err)
 			var versions map[string]any
-			require.NoError(t, json.Unmarshal([]byte(output), &versions))
+			require.NoError(t, json.Unmarshal([]byte(stdout), &versions))
 			checkClientVersion(t, requiredValue[map[string]any](t, versions, "clientVersion"))
 			checkServerVersion(t, requiredValue[map[string]any](t, versions, "serverVersion"))
+			assert.Empty(t, stderr)
 		}},
 
-		{"plugin_loader", []string{"foo"}, func(t *testing.T, output string) {
-			assert.Equal(t, "foo-plugin", output)
+		{"unknown_command", "%s i-dont-exist", func(t *testing.T, stdout, stderr string, err error) {
+			var exitErr *ssh.ExitError
+			if assert.ErrorAs(t, err, &exitErr, "Error doesn't have an exit code") {
+				assert.Equal(t, 1, exitErr.ExitStatus(), "Exit code mismatch")
+			}
+			assert.Empty(t, stdout)
+			assert.Equal(t, "Error: unknown command \"i-dont-exist\" for \"k0s kubectl\"\n", stderr)
+		}},
+		{"unknown_subcommand", "%s version i-dont-exist", func(t *testing.T, stdout, stderr string, err error) {
+			var exitErr *ssh.ExitError
+			if assert.ErrorAs(t, err, &exitErr, "Error doesn't have an exit code") {
+				assert.Equal(t, 1, exitErr.ExitStatus(), "Exit code mismatch")
+			}
+			assert.Empty(t, stdout)
+			assert.Equal(t, "error: extra arguments: [i-dont-exist]\n", stderr)
+		}},
+
+		{"plugin_list", "%s plugin list --name-only", func(t *testing.T, stdout, stderr string, err error) {
+			assert.NoError(t, err)
+			assert.Equal(t, "The following compatible plugins are available:\n\nkubectl-airgap\nkubectl-foo\n", stdout)
+			assert.Empty(t, stderr)
+		}},
+
+		{"plugin_loader_foo", "%s foo", func(t *testing.T, stdout, stderr string, err error) {
+			assert.NoError(t, err)
+			assert.Equal(t, "kubectl-foo 0\n", stdout)
+			assert.Empty(t, stderr)
+		}},
+		{"plugin_loader_foo_bar", "%s foo bar", func(t *testing.T, stdout, stderr string, err error) {
+			assert.NoError(t, err)
+			assert.Equal(t, "kubectl-foo 1 bar\n", stdout)
+			assert.Empty(t, stderr)
+		}},
+		{"plugin_loader_foo_bar_arg", "%s foo --bar", func(t *testing.T, stdout, stderr string, err error) {
+			assert.NoError(t, err)
+			assert.Equal(t, "kubectl-foo 1 --bar\n", stdout)
+			assert.Empty(t, stderr)
+		}},
+		{"plugin_loader_bar_arg_foo", "%s --bar foo", func(t *testing.T, stdout, stderr string, err error) {
+			var exitErr *ssh.ExitError
+			if assert.ErrorAs(t, err, &exitErr, "Error doesn't have an exit code") {
+				assert.Equal(t, 1, exitErr.ExitStatus(), "Exit code mismatch")
+			}
+			assert.Empty(t, stdout)
+			assert.Equal(t, "Error: unknown flag: --bar\nSee 'k0s kubectl --help' for usage.\n", stderr)
+		}},
+
+		// This test executes without having kubectl in PATH
+		{"plugin_loader_symlink_warning", "PATH=/inttest/bin %s foo", func(t *testing.T, stdout, stderr string, err error) {
+			assert.NoError(t, err)
+			assert.Equal(t, "kubectl-foo 0\n", stdout)
+			assert.Contains(t, stderr, "You can use k0s as a drop-in replacement")
 		}},
 	}
 
-	for _, callingConvention := range callingConventions {
-		for _, subcommand := range subcommands {
-			s.T().Run(fmt.Sprint(callingConvention.name, "_", subcommand.name), func(t *testing.T) {
-				cmd := strings.Join(append(callingConvention.cmd, subcommand.cmd...), " ")
-				t.Log("Executing", cmd)
-				output, err := ssh.ExecWithOutput(s.Context(), cmd)
-				t.Cleanup(func() {
-					if t.Failed() {
-						t.Log("Error: ", err)
-						t.Log("Output: ", output)
-					}
-				})
-				assert.NoError(t, err)
-				subcommand.check(t, output)
+	execTest := func(t *testing.T, cmdline string, check checkFunc) {
+		cmdline = fmt.Sprintf("PATH=/inttest/bin:/inttest/symlink %s", cmdline)
+		t.Log("Executing", cmdline)
+
+		var stdoutBuf bytes.Buffer
+		var stderrBuf bytes.Buffer
+		err := sshConn.Exec(s.Context(), cmdline, common.SSHStreams{Out: &stdoutBuf, Err: &stderrBuf})
+		stdout, stderr := stdoutBuf.String(), stderrBuf.String()
+		t.Cleanup(func() {
+			if t.Failed() {
+				t.Log("Error: ", err)
+				t.Log("Stdout: ", stdout)
+				t.Log("Stderr: ", stderr)
+			}
+		})
+
+		check(t, stdout, stderr, err)
+	}
+
+	for _, command := range commands {
+		s.T().Run(command.name, func(t *testing.T) {
+			execTest(t, fmt.Sprintf(command.cmdline, "/usr/local/bin/k0s"), command.check)
+		})
+	}
+
+	for _, callingConvention := range kubectlCallingConventions {
+		for _, command := range kubectlCommands {
+			s.T().Run(fmt.Sprint(callingConvention.name, "_", command.name), func(t *testing.T) {
+				execTest(t, fmt.Sprintf(command.cmdline, callingConvention.cmdline), command.check)
 			})
 		}
 	}

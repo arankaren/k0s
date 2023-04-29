@@ -1,5 +1,5 @@
 /*
-Copyright 2022 k0s authors
+Copyright 2021 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -22,7 +22,7 @@ import (
 	"strings"
 
 	"github.com/k0sproject/k0s/internal/pkg/file"
-	"github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
+	"github.com/k0sproject/k0s/pkg/apis/k0s/v1beta1"
 	"github.com/k0sproject/k0s/pkg/constant"
 	"github.com/sirupsen/logrus"
 	"sigs.k8s.io/yaml"
@@ -164,7 +164,7 @@ func (rules *ClientConfigLoadingRules) writeConfig(yamlData []byte, storageSpec 
 		return fmt.Errorf("failed to marshal config: %v", err)
 	}
 
-	err = file.WriteContentAtomically(rules.RuntimeConfigPath, data, 0755)
+	err = file.WriteContentAtomically(rules.RuntimeConfigPath, data, 0600)
 	if err != nil {
 		return fmt.Errorf("failed to write runtime config to %s (%v): %v", rules.K0sVars.RunDir, rules.RuntimeConfigPath, err)
 	}

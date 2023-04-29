@@ -18,7 +18,7 @@ package workerconfig
 
 import (
 	"github.com/k0sproject/k0s/internal/pkg/net"
-	"github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
+	"github.com/k0sproject/k0s/pkg/apis/k0s/v1beta1"
 
 	corev1 "k8s.io/api/core/v1"
 
@@ -46,6 +46,7 @@ type configSnapshot struct {
 	konnectivityAgentPort  uint16
 	defaultImagePullPolicy corev1.PullPolicy
 	profiles               v1beta1.WorkerProfiles
+	featureGates           v1beta1.FeatureGates
 }
 
 func (s *snapshot) DeepCopy() *snapshot {
@@ -91,5 +92,6 @@ func takeConfigSnapshot(spec *v1beta1.ClusterSpec) configSnapshot {
 		konnectivityAgentPort,
 		corev1.PullPolicy(spec.Images.DefaultPullPolicy),
 		spec.WorkerProfiles.DeepCopy(),
+		spec.FeatureGates.DeepCopy(),
 	}
 }

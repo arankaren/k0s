@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version tag (e.g."v1.26.0+k0s.0")'
+        description: 'Version tag (e.g."v1.27.1+k0s.0")'
         required: true
 
 env:
@@ -53,6 +53,8 @@ jobs:
           rm -rf main
 
       - name: Generate docs
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: make -C docs docs clean-k0s
 
       - name: git config

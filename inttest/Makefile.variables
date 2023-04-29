@@ -20,6 +20,7 @@ smoketests := \
 	check-configchange \
 	check-ctr \
 	check-customports \
+	check-customports-dynamicconfig \
 	check-defaultstorage \
 	check-disabledcomponents \
 	check-dualstack \
@@ -44,7 +45,7 @@ smoketests := \
 	check-upgrade \
 	check-kubectl \
 	check-k0sctl \
-	check-metricscraper \
+	check-metricsscraper \
 	check-customdomain \
 	check-capitalhostnames \
 	check-customca \
@@ -52,3 +53,5 @@ smoketests := \
 	check-network-conformance-kuberouter \
 	check-network-conformance-calico \
 	check-embedded-binaries \
+	check-custom-cidrs \
+	check-containerdimports \

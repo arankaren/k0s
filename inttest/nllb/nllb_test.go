@@ -24,7 +24,7 @@ import (
 	"time"
 
 	"github.com/k0sproject/k0s/inttest/common"
-	"github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
+	"github.com/k0sproject/k0s/pkg/apis/k0s/v1beta1"
 	"github.com/k0sproject/k0s/pkg/constant"
 	"github.com/k0sproject/k0s/pkg/kubernetes/watch"
 
@@ -313,7 +313,7 @@ func (s *suite) checkClusterReadiness(ctx context.Context, clients *kubernetes.C
 	for _, deployment := range []string{"coredns", "metrics-server"} {
 		deployment := deployment
 		eg.Go(func() error {
-			if err := common.WaitForDeployment(ctx, clients, deployment); err != nil {
+			if err := common.WaitForDeployment(ctx, clients, deployment, "kube-system"); err != nil {
 				return fmt.Errorf("%s did not become ready: %w", deployment, err)
 			}
 			s.T().Log(deployment, "is ready")

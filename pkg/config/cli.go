@@ -1,5 +1,5 @@
 /*
-Copyright 2022 k0s authors
+Copyright 2021 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -24,12 +24,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
+	"github.com/k0sproject/k0s/pkg/apis/k0s/v1beta1"
 	aproot "github.com/k0sproject/k0s/pkg/autopilot/controller/root"
 	"github.com/k0sproject/k0s/pkg/component/manager"
 	"github.com/k0sproject/k0s/pkg/constant"
-
-	cloudprovider "k8s.io/cloud-provider"
+	"github.com/k0sproject/k0s/pkg/k0scloudprovider"
 
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -103,7 +102,18 @@ func (o *ControllerOptions) Normalize() error {
 	// Normalize component names
 	var disabledComponents []string
 	for _, disabledComponent := range o.DisableComponents {
-		if disabledComponent == constant.KubeletConfigComponentName {
+		switch disabledComponent {
+		case constant.APIConfigComponentName:
+			logrus.Warnf("Usage of deprecated component name %q, please switch to %q",
+				constant.APIConfigComponentName, "--enable-dynamic-config=false",
+			)
+			if o.EnableDynamicConfig {
+				logrus.Warnf("Cannot disable component %q, because %q is selected",
+					constant.APIConfigComponentName, "--enable-dynamic-config",
+				)
+			}
+
+		case constant.KubeletConfigComponentName:
 			logrus.Warnf("Usage of deprecated component name %q, please switch to %q",
 				constant.KubeletConfigComponentName, constant.WorkerConfigComponentName,
 			)
@@ -186,7 +196,6 @@ func GetWorkerFlags() *pflag.FlagSet {
 }
 
 var availableComponents = []string{
-	constant.APIConfigComponentName,
 	constant.AutopilotComponentName,
 	constant.ControlAPIComponentName,
 	constant.CoreDNSComponentname,
@@ -216,7 +225,7 @@ func GetControllerFlags() *pflag.FlagSet {
 	flagset.BoolVar(&controllerOpts.NoTaints, "no-taints", false, "disable default taints for controller node")
 	flagset.BoolVar(&controllerOpts.EnableK0sCloudProvider, "enable-k0s-cloud-provider", false, "enables the k0s-cloud-provider (default false)")
 	flagset.DurationVar(&controllerOpts.K0sCloudProviderUpdateFrequency, "k0s-cloud-provider-update-frequency", 2*time.Minute, "the frequency of k0s-cloud-provider node updates")
-	flagset.IntVar(&controllerOpts.K0sCloudProviderPort, "k0s-cloud-provider-port", cloudprovider.CloudControllerManagerPort, "the port that k0s-cloud-provider binds on")
+	flagset.IntVar(&controllerOpts.K0sCloudProviderPort, "k0s-cloud-provider-port", k0scloudprovider.DefaultBindPort, "the port that k0s-cloud-provider binds on")
 	flagset.AddFlagSet(GetCriSocketFlag())
 	flagset.BoolVar(&controllerOpts.EnableDynamicConfig, "enable-dynamic-config", false, "enable cluster-wide dynamic config based on custom resource")
 	flagset.BoolVar(&controllerOpts.EnableMetricsScraper, "enable-metrics-scraper", false, "enable scraping metrics from the controller components (kube-scheduler, kube-controller-manager)")

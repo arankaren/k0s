@@ -1,5 +1,5 @@
 /*
-Copyright 2022 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -46,7 +46,7 @@ func (s *ExtraArgsSuite) TestK0sGetsUp() {
 	s.T().Log("waiting to see kube-router pods ready")
 	s.NoError(common.WaitForKubeRouterReady(s.Context(), kc), "kube-router did not start")
 
-	ssh, err := s.SSH(s.ControllerNode(0))
+	ssh, err := s.SSH(s.Context(), s.ControllerNode(0))
 	defer ssh.Disconnect()
 	s.NoError(err)
 

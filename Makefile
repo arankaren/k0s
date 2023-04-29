@@ -19,7 +19,7 @@ endif
 K0S_GO_BUILD_CACHE ?= build/cache
 
 GO_SRCS := $(shell find . -type f -name '*.go' -not -path './$(K0S_GO_BUILD_CACHE)/*' -not -path './inttest/*' -not -name '*_test.go' -not -name 'zz_generated*')
-GO_DIRS := . ./cmd/... ./pkg/... ./internal/... ./static/... ./hack/...
+GO_CHECK_UNIT_DIRS := . ./cmd/... ./pkg/... ./internal/... ./static/... ./hack/...
 
 # EMBEDDED_BINS_BUILDMODE can be either:
 #   docker	builds the binaries in docker
@@ -82,6 +82,13 @@ GO_ENV ?= docker run --rm \
 	k0sbuild.docker-image.k0s
 GO ?= $(GO_ENV) go
 
+# https://www.gnu.org/software/make/manual/make.html#index-spaces_002c-in-variable-values
+nullstring :=
+space := $(nullstring) # space now holds a single space
+comma := ,
+
+.DELETE_ON_ERROR:
+
 .PHONY: build
 ifeq ($(TARGET_OS),windows)
 build: k0s.exe
@@ -106,19 +113,19 @@ $(K0S_GO_BUILD_CACHE):
 go.sum: go.mod .k0sbuild.docker-image.k0s
 	$(GO) mod tidy && touch -c -- '$@'
 
-codegen_targets += pkg/apis/helm.k0sproject.io/v1beta1/.controller-gen.stamp
-pkg/apis/helm.k0sproject.io/v1beta1/.controller-gen.stamp: $(shell find pkg/apis/helm.k0sproject.io/v1beta1/  -maxdepth 1 -type f -name \*.go)
-pkg/apis/helm.k0sproject.io/v1beta1/.controller-gen.stamp: gen_output_dir = helm
+codegen_targets += pkg/apis/helm/v1beta1/.controller-gen.stamp
+pkg/apis/helm/v1beta1/.controller-gen.stamp: $(shell find pkg/apis/helm/v1beta1/ -maxdepth 1 -type f -name \*.go)
+pkg/apis/helm/v1beta1/.controller-gen.stamp: gen_output_dir = helm
 
-codegen_targets += pkg/apis/k0s.k0sproject.io/v1beta1/.controller-gen.stamp
-pkg/apis/k0s.k0sproject.io/v1beta1/.controller-gen.stamp: $(shell find pkg/apis/k0s.k0sproject.io/v1beta1/ -maxdepth 1 -type f -name \*.go)
-pkg/apis/k0s.k0sproject.io/v1beta1/.controller-gen.stamp: gen_output_dir = v1beta1
+codegen_targets += pkg/apis/k0s/v1beta1/.controller-gen.stamp
+pkg/apis/k0s/v1beta1/.controller-gen.stamp: $(shell find pkg/apis/k0s/v1beta1/ -maxdepth 1 -type f -name \*.go)
+pkg/apis/k0s/v1beta1/.controller-gen.stamp: gen_output_dir = v1beta1
 
-codegen_targets += pkg/apis/autopilot.k0sproject.io/v1beta2/.controller-gen.stamp
-pkg/apis/autopilot.k0sproject.io/v1beta2/.controller-gen.stamp: $(shell find pkg/apis/autopilot.k0sproject.io/v1beta2/ -maxdepth 1 -type f -name \*.go)
-pkg/apis/autopilot.k0sproject.io/v1beta2/.controller-gen.stamp: gen_output_dir = autopilot
+codegen_targets += pkg/apis/autopilot/v1beta2/.controller-gen.stamp
+pkg/apis/autopilot/v1beta2/.controller-gen.stamp: $(shell find pkg/apis/autopilot/v1beta2/ -maxdepth 1 -type f -name \*.go)
+pkg/apis/autopilot/v1beta2/.controller-gen.stamp: gen_output_dir = autopilot
 
-pkg/apis/%/.controller-gen.stamp: .k0sbuild.docker-image.k0s hack/tools/Makefile.variables
+pkg/apis/%/.controller-gen.stamp: .k0sbuild.docker-image.k0s hack/tools/boilerplate.go.txt hack/tools/Makefile.variables
 	rm -rf 'static/manifests/$(gen_output_dir)/CustomResourceDefinition'
 	rm -f -- '$(dir $@)'zz_*.go
 	CGO_ENABLED=0 $(GO) install sigs.k8s.io/controller-tools/cmd/controller-gen@v$(controller-gen_version)
@@ -126,31 +133,22 @@ pkg/apis/%/.controller-gen.stamp: .k0sbuild.docker-image.k0s hack/tools/Makefile
 	  crd \
 	  paths="./$(dir $@)..." \
 	  output:crd:artifacts:config=./static/manifests/$(gen_output_dir)/CustomResourceDefinition \
-	  object
+	  object:headerFile=hack/tools/boilerplate.go.txt
 	touch -- '$@'
 
-# Note: k0s.k0sproject.io omits the version from the output directory, so this needs
-# special handling until this versioning layout is fixed.
-
-codegen_targets += pkg/apis/k0s.k0sproject.io/v1beta1/.client-gen.stamp
-pkg/apis/k0s.k0sproject.io/v1beta1/.client-gen.stamp: $(shell find pkg/apis/k0s.k0sproject.io/v1beta1/ -maxdepth 1 -type f -name \*.go -not -name zz_\*.go)
-pkg/apis/k0s.k0sproject.io/v1beta1/.client-gen.stamp: groupver = k0s.k0sproject.io/v1beta1
-pkg/apis/k0s.k0sproject.io/v1beta1/.client-gen.stamp: gen_output_dir = k0s.k0sproject.io
-
-codegen_targets += pkg/apis/autopilot.k0sproject.io/v1beta2/.client-gen.stamp
-pkg/apis/autopilot.k0sproject.io/v1beta2/.client-gen.stamp: $(shell find pkg/apis/autopilot.k0sproject.io/v1beta2/ -maxdepth 1 -type f -name \*.go -not -name zz_\*.go)
-pkg/apis/autopilot.k0sproject.io/v1beta2/.client-gen.stamp: groupver = autopilot.k0sproject.io/v1beta2
-pkg/apis/autopilot.k0sproject.io/v1beta2/.client-gen.stamp: gen_output_dir = $(groupver)
-
-pkg/apis/%/.client-gen.stamp: .k0sbuild.docker-image.k0s hack/tools/boilerplate.go.txt embedded-bins/Makefile.variables
-	rm -rf 'pkg/apis/$(gen_output_dir)/clientset/'
-	CGO_ENABLED=0 $(GO) install k8s.io/code-generator/cmd/client-gen@v$(patsubst 1.%,0.%,$(kubernetes_version))
-	$(GO_ENV) client-gen \
-	  --go-header-file hack/tools/boilerplate.go.txt \
-	  --input=$(groupver) \
-	  --input-base github.com/k0sproject/k0s/pkg/apis \
-	  --clientset-name=clientset \
-	  --output-package=github.com/k0sproject/k0s/pkg/apis/$(gen_output_dir)/
+clientset_input_dirs := pkg/apis/autopilot/v1beta2 pkg/apis/k0s/v1beta1
+codegen_targets += pkg/client/clientset/.client-gen.stamp
+pkg/client/clientset/.client-gen.stamp: $(shell find $(clientset_input_dirs) -type f -name \*.go -not -name \*_test.go -not -name zz_\*)
+pkg/client/clientset/.client-gen.stamp: .k0sbuild.docker-image.k0s hack/tools/boilerplate.go.txt embedded-bins/Makefile.variables
+	rm -rf -- '$(dir $@)'
+	CGO_ENABLED=0 $(GO) run k8s.io/code-generator/cmd/client-gen@v$(kubernetes_version:1.%=0.%) \
+	  --go-header-file=hack/tools/boilerplate.go.txt \
+	  --input-base='' \
+	  --input=$(subst $(space),$(comma),$(clientset_input_dirs:%=github.com/k0sproject/k0s/%)) \
+	  --output-package=github.com/k0sproject/k0s/$(patsubst %/,%,$(dir $(patsubst %/,%,$(dir $@)))) \
+	  --clientset-name=$(notdir $(patsubst %/,%,$(dir $@))) \
+	  --output-base=. \
+	  --trim-path-prefix=github.com/k0sproject/k0s
 	touch -- '$@'
 
 codegen_targets += static/zz_generated_assets.go
@@ -159,7 +157,7 @@ static/zz_generated_assets.go: .k0sbuild.docker-image.k0s hack/tools/Makefile.va
 static/zz_generated_assets.go: $(shell find $(static_asset_dirs) -type f)
 	-rm -f -- '$@'
 	CGO_ENABLED=0 $(GO) install github.com/kevinburke/go-bindata/go-bindata@v$(go-bindata_version)
-	$(GO_ENV) go-bindata -o '$@' -pkg static -prefix static $(patsubst %,%/...,$(static_asset_dirs)) || rm -f -- '$@'
+	$(GO_ENV) go-bindata -o '$@' -pkg static -prefix static $(patsubst %,%/...,$(static_asset_dirs))
 
 codegen_targets += pkg/assets/zz_generated_offsets_$(TARGET_OS).go
 zz_os = $(patsubst pkg/assets/zz_generated_offsets_%.go,%,$@)
@@ -209,18 +207,21 @@ codegen: $(codegen_targets)
 .PHONY: bindata
 bindata: static/zz_generated_assets.go pkg/assets/zz_generated_offsets_$(TARGET_OS).go
 
-.PHONY: lint
-lint: GOLANGCI_LINT_FLAGS ?=
-lint: .k0sbuild.docker-image.k0s go.sum codegen
+.PHONY: lint-copyright
+lint-copyright:
+	hack/copyright.sh
+
+.PHONY: lint-go
+lint-go: GOLANGCI_LINT_FLAGS ?=
+lint-go: .k0sbuild.docker-image.k0s go.sum codegen
 	CGO_ENABLED=0 $(GO) install github.com/golangci/golangci-lint/cmd/golangci-lint@v$(golangci-lint_version)
-	$(GO_ENV) golangci-lint run --verbose $(GOLANGCI_LINT_FLAGS) $(GO_DIRS)
+	$(GO_ENV) golangci-lint run --verbose $(GOLANGCI_LINT_FLAGS) $(GO_LINT_DIRS)
+
+.PHONY: lint
+lint: lint-copyright lint-go
 
 airgap-images.txt: k0s .k0sbuild.docker-image.k0s 
-	$(GO_ENV) ./k0s airgap list-images --all > '$@' || { \
-	  code=$$? && \
-	  rm -f -- '$@' && \
-	  exit $$code ; \
-	}
+	$(GO_ENV) ./k0s airgap list-images --all > '$@'
 
 airgap-image-bundle-linux-amd64.tar: TARGET_PLATFORM := linux/amd64
 airgap-image-bundle-linux-arm64.tar: TARGET_PLATFORM := linux/arm64
@@ -230,9 +231,7 @@ airgap-image-bundle-linux-arm64.tar \
 airgap-image-bundle-linux-arm.tar: .k0sbuild.image-bundler.stamp airgap-images.txt
 	docker run --rm -i --privileged \
 	  -e TARGET_PLATFORM='$(TARGET_PLATFORM)' \
-	  k0sbuild.image-bundler < airgap-images.txt > '$@' || { \
-	    code=$$? && rm -f -- '$@' && exit $$code ; \
-	  }
+	  k0sbuild.image-bundler < airgap-images.txt > '$@'
 
 .k0sbuild.image-bundler.stamp: hack/image-bundler/*
 	docker build \
@@ -252,7 +251,7 @@ smoketests: $(smoketests)
 .PHONY: check-unit
 check-unit: GO_TEST_RACE ?= -race
 check-unit: go.sum codegen
-	$(GO) test -tags=hack $(GO_TEST_RACE) -ldflags='$(LD_FLAGS)' `$(GO) list -tags=hack $(GO_DIRS)`
+	$(GO) test -tags=hack $(GO_TEST_RACE) -ldflags='$(LD_FLAGS)' `$(GO) list -tags=hack $(GO_CHECK_UNIT_DIRS)`
 
 .PHONY: check-image-validity
 check-image-validity: go.sum
@@ -277,6 +276,7 @@ clean: clean-gocache clean-docker-image clean-airgap-image-bundles
 	-rm -f pkg/assets/zz_generated_offsets_*.go k0s k0s.exe .bins.*stamp bindata* static/zz_generated_assets.go
 	-rm -rf $(K0S_GO_BUILD_CACHE) 
 	-find pkg/apis -type f \( -name .client-gen.stamp -or -name .controller-gen.stamp \) -delete
+	-rm -f hack/.copyright.stamp
 	-$(MAKE) -C docs clean
 	-$(MAKE) -C embedded-bins clean
 	-$(MAKE) -C inttest clean

@@ -1,5 +1,5 @@
 /*
-Copyright 2022 k0s authors
+Copyright 2021 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -34,4 +34,8 @@ func Nodes(client Provider[*corev1.NodeList]) *Watcher[corev1.Node] {
 
 func Pods(client Provider[*corev1.PodList]) *Watcher[corev1.Pod] {
 	return FromClient[*corev1.PodList, corev1.Pod](client)
+}
+
+func Events(client Provider[*corev1.EventList]) *Watcher[corev1.Event] {
+	return FromClient[*corev1.EventList, corev1.Event](client)
 }

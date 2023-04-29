@@ -26,7 +26,7 @@ import (
 	"time"
 
 	"github.com/k0sproject/k0s/internal/testutil"
-	"github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
+	"github.com/k0sproject/k0s/pkg/apis/k0s/v1beta1"
 	"github.com/k0sproject/k0s/pkg/component/controller/leaderelector"
 	"github.com/k0sproject/k0s/pkg/constant"
 
@@ -48,6 +48,7 @@ import (
 
 type kubeletConfig = kubeletv1beta1.KubeletConfiguration
 
+// TODO: simplify it somehow, it is hard to read and to modify, both tests and implementation
 func TestReconciler_Lifecycle(t *testing.T) {
 	createdReconciler := func(t *testing.T) (*Reconciler, testutil.FakeClientFactory) {
 		t.Helper()
@@ -334,6 +335,13 @@ func TestReconciler_ResourceGeneration(t *testing.T) {
 
 	require.NoError(t, underTest.Reconcile(context.TODO(), &v1beta1.ClusterConfig{
 		Spec: &v1beta1.ClusterSpec{
+			FeatureGates: v1beta1.FeatureGates{
+				v1beta1.FeatureGate{
+					Name:       "kubelet-feature",
+					Enabled:    true,
+					Components: []string{"kubelet"},
+				},
+			},
 			Network: &v1beta1.Network{
 				NodeLocalLoadBalancing: &v1beta1.NodeLocalLoadBalancing{
 					Enabled: true,
@@ -360,20 +368,24 @@ func TestReconciler_ResourceGeneration(t *testing.T) {
 	}))
 
 	configMaps := map[string]func(t *testing.T, expected *kubeletConfig){
-		"worker-config-default-1.26": func(t *testing.T, expected *kubeletConfig) {
+		"worker-config-default-1.27": func(t *testing.T, expected *kubeletConfig) {
 			expected.CgroupsPerQOS = pointer.Bool(true)
+			expected.FeatureGates = map[string]bool{"kubelet-feature": true}
 		},
 
-		"worker-config-default-windows-1.26": func(t *testing.T, expected *kubeletConfig) {
+		"worker-config-default-windows-1.27": func(t *testing.T, expected *kubeletConfig) {
 			expected.CgroupsPerQOS = pointer.Bool(false)
+			expected.FeatureGates = map[string]bool{"kubelet-feature": true}
 		},
 
-		"worker-config-profile_XXX-1.26": func(t *testing.T, expected *kubeletConfig) {
+		"worker-config-profile_XXX-1.27": func(t *testing.T, expected *kubeletConfig) {
 			expected.Authentication.Anonymous.Enabled = pointer.Bool(true)
+			expected.FeatureGates = map[string]bool{"kubelet-feature": true}
 		},
 
-		"worker-config-profile_YYY-1.26": func(t *testing.T, expected *kubeletConfig) {
+		"worker-config-profile_YYY-1.27": func(t *testing.T, expected *kubeletConfig) {
 			expected.Authentication.Webhook.CacheTTL = metav1.Duration{Duration: 15 * time.Second}
+			expected.FeatureGates = map[string]bool{"kubelet-feature": true}
 		},
 	}
 
@@ -710,15 +722,14 @@ func makeKubeletConfig(t *testing.T, mods ...func(*kubeletConfig)) string {
 		FailSwapOn:         pointer.Bool(false),
 		RotateCertificates: true,
 		ServerTLSBootstrap: true,
+		TLSMinVersion:      "VersionTLS12",
 		TLSCipherSuites: []string{
 			"TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
 			"TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
-			"TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305",
+			"TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256",
 			"TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
 			"TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
-			"TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305",
-			"TLS_RSA_WITH_AES_128_GCM_SHA256",
-			"TLS_RSA_WITH_AES_256_GCM_SHA384",
+			"TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256",
 		},
 	}
 

@@ -1,5 +1,5 @@
 /*
-Copyright 2022 k0s authors
+Copyright 2021 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -36,13 +36,28 @@ type AirgapSuite struct {
 	common.FootlooseSuite
 }
 
+const network = "airgap"
+
+// SetupSuite creates the required network before starting footloose.
+func (s *AirgapSuite) SetupSuite() {
+	s.Require().NoError(s.CreateNetwork(network))
+	s.FootlooseSuite.SetupSuite()
+}
+
+// TearDownSuite tears down the network created after footloose has finished.
+func (s *AirgapSuite) TearDownSuite() {
+	s.FootlooseSuite.TearDownSuite()
+	s.Require().NoError(s.MaybeDestroyNetwork(network))
+}
+
 func (s *AirgapSuite) TestK0sGetsUp() {
-	(&common.Airgap{
+	err := (&common.Airgap{
 		SSH:  s.SSH,
 		Logf: s.T().Logf,
 	}).LockdownMachines(s.Context(),
 		s.ControllerNode(0), s.WorkerNode(0),
 	)
+	s.Require().NoError(err)
 
 	s.PutFile(s.ControllerNode(0), "/tmp/k0s.yaml", k0sConfig)
 	s.NoError(s.InitController(0, "--config=/tmp/k0s.yaml"))
@@ -95,8 +110,10 @@ func (s *AirgapSuite) TestK0sGetsUp() {
 func TestAirgapSuite(t *testing.T) {
 	s := AirgapSuite{
 		common.FootlooseSuite{
-			ControllerCount: 1,
-			WorkerCount:     1,
+			ControllerCount:    1,
+			WorkerCount:        1,
+			ControllerNetworks: []string{network},
+			WorkerNetworks:     []string{network},
 
 			AirgapImageBundleMountPoints: []string{"/var/lib/k0s/images/bundle.tar"},
 		},

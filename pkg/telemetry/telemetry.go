@@ -1,5 +1,5 @@
 /*
-Copyright 2022 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -26,7 +26,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/k0sproject/k0s/internal/pkg/sysinfo/machineid"
-	"github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
+	"github.com/k0sproject/k0s/pkg/apis/k0s/v1beta1"
 	kubeutil "github.com/k0sproject/k0s/pkg/kubernetes"
 )
 
@@ -147,6 +147,7 @@ func (c Component) sendTelemetry(ctx context.Context) {
 	hostData.Extra["cpuArch"] = runtime.GOARCH
 
 	addSysInfo(&hostData)
+	c.addCustomData(ctx, &hostData)
 
 	c.log.WithField("data", data).WithField("hostdata", hostData).Info("sending telemetry")
 	if err := c.analyticsClient.Enqueue(analytics.Track{
@@ -156,6 +157,16 @@ func (c Component) sendTelemetry(ctx context.Context) {
 		Context:     &hostData,
 	}); err != nil {
 		c.log.WithError(err).Warning("can't send telemetry data")
+	}
+}
+
+func (c Component) addCustomData(ctx context.Context, analyticCtx *analytics.Context) {
+	cm, err := c.kubernetesClient.CoreV1().ConfigMaps("kube-system").Get(ctx, "k0s-telemetry", metav1.GetOptions{})
+	if err != nil {
+		return
+	}
+	for k, v := range cm.Data {
+		analyticCtx.Extra[fmt.Sprintf("custom.%s", k)] = v
 	}
 }
 

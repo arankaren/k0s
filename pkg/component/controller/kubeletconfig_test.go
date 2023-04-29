@@ -1,5 +1,5 @@
 /*
-Copyright 2022 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -22,8 +22,8 @@ import (
 	"testing"
 
 	"github.com/k0sproject/k0s/internal/testutil"
-	"github.com/k0sproject/k0s/pkg/apis/helm.k0sproject.io/v1beta1"
-	config "github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
+	"github.com/k0sproject/k0s/pkg/apis/helm/v1beta1"
+	config "github.com/k0sproject/k0s/pkg/apis/k0s/v1beta1"
 	"github.com/k0sproject/k0s/pkg/constant"
 	"sigs.k8s.io/yaml"
 
@@ -31,10 +31,11 @@ import (
 )
 
 func Test_KubeletConfig(t *testing.T) {
+	cfg := config.DefaultClusterConfig()
 	k0sVars := constant.GetConfig(t.TempDir())
 	dnsAddr, _ := cfg.Spec.Network.DNSAddress()
 	t.Run("default_profile_only", func(t *testing.T) {
-		k := NewKubeletConfig(k0sVars, testutil.NewFakeClientFactory())
+		k := NewKubeletConfig(k0sVars, testutil.NewFakeClientFactory(), cfg)
 
 		t.Log("starting to run...")
 		buf, err := k.createProfiles(cfg)
@@ -45,8 +46,8 @@ func Test_KubeletConfig(t *testing.T) {
 		manifestYamls := strings.Split(strings.TrimSuffix(buf.String(), "---"), "---")[1:]
 		t.Run("output_must_have_3_manifests", func(t *testing.T) {
 			require.Len(t, manifestYamls, 4, "Must have exactly 4 generated manifests per profile")
-			requireConfigMap(t, manifestYamls[0], "kubelet-config-default-1.26")
-			requireConfigMap(t, manifestYamls[1], "kubelet-config-default-windows-1.26")
+			requireConfigMap(t, manifestYamls[0], "kubelet-config-default-1.27")
+			requireConfigMap(t, manifestYamls[1], "kubelet-config-default-windows-1.27")
 			requireRole(t, manifestYamls[2], []string{
 				formatProfileName("default"),
 				formatProfileName("default-windows"),
@@ -61,18 +62,18 @@ func Test_KubeletConfig(t *testing.T) {
 		), profile["clusterDomain"])
 	})
 	t.Run("with_user_provided_profiles", func(t *testing.T) {
-		k := defaultConfigWithUserProvidedProfiles(t)
-		buf, err := k.createProfiles(cfg)
+		k, cfgWithUserProvidedProfiles := defaultConfigWithUserProvidedProfiles(t)
+		buf, err := k.createProfiles(cfgWithUserProvidedProfiles)
 		require.NoError(t, err)
 		manifestYamls := strings.Split(strings.TrimSuffix(buf.String(), "---"), "---")[1:]
 		expectedManifestsCount := 6
-		require.Len(t, manifestYamls, expectedManifestsCount, "Must have exactly 3 generated manifests per profile")
+		require.Len(t, manifestYamls, expectedManifestsCount, "Must have exactly 6 generated manifests per profile")
 
 		t.Run("final_output_must_have_manifests_for_profiles", func(t *testing.T) {
 			// check that each profile has config map, role and role binding
 			var resourceNamesForRole []string
 			for idx, profileName := range []string{"default", "default-windows", "profile_XXX", "profile_YYY"} {
-				fullName := "kubelet-config-" + profileName + "-1.26"
+				fullName := "kubelet-config-" + profileName + "-1.27"
 				resourceNamesForRole = append(resourceNamesForRole, formatProfileName(profileName))
 				requireConfigMap(t, manifestYamls[idx], fullName)
 			}
@@ -116,9 +117,10 @@ func Test_KubeletConfig(t *testing.T) {
 	})
 }
 
-func defaultConfigWithUserProvidedProfiles(t *testing.T) *KubeletConfig {
+func defaultConfigWithUserProvidedProfiles(t *testing.T) (*KubeletConfig, *config.ClusterConfig) {
+	cfg := config.DefaultClusterConfig()
 	k0sVars := constant.GetConfig(t.TempDir())
-	k := NewKubeletConfig(k0sVars, testutil.NewFakeClientFactory())
+	k := NewKubeletConfig(k0sVars, testutil.NewFakeClientFactory(), cfg)
 
 	cfgProfileX := map[string]interface{}{
 		"authentication": map[string]interface{}{
@@ -157,7 +159,7 @@ func defaultConfigWithUserProvidedProfiles(t *testing.T) *KubeletConfig {
 			Config: wcy,
 		},
 	)
-	return k
+	return k, cfg
 }
 
 func requireConfigMap(t *testing.T, spec string, name string) {

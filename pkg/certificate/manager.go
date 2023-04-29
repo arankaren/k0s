@@ -1,5 +1,5 @@
 /*
-Copyright 2022 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -128,8 +128,8 @@ func (m *Manager) EnsureCertificate(certReq Request, ownerName string) (Certific
 			return Certificate{}, err
 		}
 		config := cli.Config{
-			CAFile:    certReq.CACert,
-			CAKeyFile: certReq.CAKey,
+			CAFile:    fmt.Sprintf("file:%s", certReq.CACert),
+			CAKeyFile: fmt.Sprintf("file:%s", certReq.CAKey),
 		}
 		s, err := sign.SignerFromConfig(config)
 		if err != nil {

@@ -1,6 +1,6 @@
 
-ARCH = $(shell go env GOARCH)
-OS = $(shell go env GOOS)
+ARCH := $(shell go env GOARCH)
+OS := $(shell go env GOOS)
 K0S_UPDATE_TO_VERSION ?= $(shell ../k0s version)
 
 SONOBUOY_VERSION ?= 0.56.11
@@ -12,12 +12,6 @@ bins = bin/sonobuoy
 
 include ../embedded-bins/Makefile.variables
 
-ifeq ($(ARCH),amd64)
-etcd_arch = amd64
-else
-etcd_arch = arm64
-endif
-
 .PHONY: all
 all: $(bins) .footloose-alpine.stamp
 
@@ -27,15 +21,32 @@ bin:
 bin/sonobuoy: | bin
 	$(curl) $(sonobuoy_url) | tar -C bin/ -zxv $(notdir $@)
 
-.footloose-alpine.stamp: footloose-alpine/Dockerfile $(shell find footloose-alpine/root -type f)
+footloose_alpine_build_cmdline := \
+	--build-arg GOLANG_IMAGE=$(golang_buildimage) \
+	--build-arg ALPINE_VERSION=$(alpine_patch_version) \
+	--build-arg ETCD_VERSION=$(etcd_version) \
+	--build-arg HELM_VERSION=$(helm_version) \
+	--build-arg KUBE_VERSION=$(kubernetes_version) \
+	-t footloose-alpine \
+	-f footloose-alpine/Dockerfile \
+	footloose-alpine
+
+.footloose-alpine.stamp:
+	docker build --build-arg TARGETARCH=$(ARCH) $(footloose_alpine_build_cmdline)
+	touch $@
+
+# This is a special target to test the footloose alpine image locally for all supported platforms.
+.PHONY: check-footloose-alpine-buildx
+check-footloose-alpine-buildx:
+	docker buildx build --platform linux/amd64,linux/arm64,linux/arm/v7 $(footloose_alpine_build_cmdline)
+
+.footloose-k0s.stamp: K0S_PATH ?= $(realpath ../k0s)
+.footloose-k0s.stamp: .footloose-alpine.stamp
 	docker build \
-	  --build-arg ALPINE_VERSION=$(alpine_patch_version) \
-	  --build-arg ETCD_ARCH=$(etcd_arch) \
-	  --build-arg ETCD_VERSION=$(etcd_version) \
-	  --build-arg KUBE_VERSION=$(kubernetes_version) \
-	  -t footloose-alpine \
-	  -f footloose-alpine/Dockerfile \
-	  footloose-alpine
+	  --build-arg K0S_PATH=$(notdir $(K0S_PATH)) \
+	  -t footloose-k0s \
+	  -f footloose-k0s/Dockerfile \
+	  $(dir $(K0S_PATH))
 	touch $@
 
 .update-server.stamp: .footloose-alpine.stamp update-server/Dockerfile update-server/html/stable/index.yaml
@@ -62,7 +73,7 @@ check-ctr: TIMEOUT=10m
 check-byocri: TIMEOUT=5m
 # readiness check for metric tests takes between around 5 and 6 minutes.
 check-metrics: TIMEOUT=6m
-check-metricscraper: TIMEOUT=6m
+check-metricsscraper: TIMEOUT=6m
 
 check-calico: TIMEOUT=6m
 
@@ -79,6 +90,9 @@ check-backup: TIMEOUT=10m
 check-ap-ha3x3: K0S_UPDATE_FROM_BIN ?= ../k0s
 check-ap-ha3x3: K0S_UPDATE_FROM_PATH ?= $(realpath $(K0S_UPDATE_FROM_BIN))
 check-ap-ha3x3: TIMEOUT=6m
+
+check-customports-dynamicconfig: export K0S_ENABLE_DYNAMIC_CONFIG=true
+check-customports-dynamicconfig: TEST_PACKAGE=customports
 
 check-kubeletcertrotate: TIMEOUT=15m
 
@@ -100,7 +114,7 @@ check-nllb: TIMEOUT=10m
 include Makefile.variables
 
 $(smoketests): K0S_PATH ?= $(realpath ../k0s)
-$(smoketests): K0S_IMAGES_BUNDLE ?= $(realpath ../airgap-image-bundle-linux-amd64.tar)
+$(smoketests): K0S_IMAGES_BUNDLE ?= $(realpath ../airgap-image-bundle-linux-$(ARCH).tar)
 $(smoketests): .footloose-alpine.stamp
 $(smoketests): TEST_PACKAGE ?= $(subst check-,,$@)
 $(smoketests):

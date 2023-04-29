@@ -19,6 +19,8 @@ package prober
 import (
 	"container/ring"
 	"context"
+	"encoding/json"
+	"errors"
 	"sync"
 	"time"
 
@@ -45,6 +47,7 @@ type Prober struct {
 
 	closeCh chan struct{}
 	startCh chan struct{}
+	runOnce sync.Once
 
 	eventsTrackLength int
 	eventState        map[string]*ring.Ring
@@ -68,6 +71,9 @@ func New() *Prober {
 	}
 }
 
+// DefaultProber default global instance
+var DefaultProber = New()
+
 // State gives read-only copy of current state
 func (p *Prober) State(maxCount int) State {
 	p.RLock()
@@ -77,6 +83,7 @@ func (p *Prober) State(maxCount int) State {
 		Events:       make(map[string][]Event),
 	}
 	for name, r := range p.healthCheckState {
+		maxCount := maxCount
 		state.HealthProbes[name] = make([]ProbeResult, 0, p.probesTrackLength*len(p.withHealthComponents))
 		r.Do(func(v interface{}) {
 			if v == nil {
@@ -93,6 +100,7 @@ func (p *Prober) State(maxCount int) State {
 		state.HealthProbes[name] = state.HealthProbes[name][0:maxCount]
 	}
 	for name, r := range p.eventState {
+		maxCount := maxCount
 		state.Events[name] = make([]Event, 0, p.eventsTrackLength*len(p.withEventComponents))
 		r.Do(func(v interface{}) {
 			if v == nil {
@@ -121,9 +129,11 @@ type State struct {
 
 // Run starts the prober workin loop
 func (p *Prober) Run(ctx context.Context) {
-	close(p.startCh)
-	p.healthCheckLoop(ctx)
-	close(p.closeCh)
+	p.runOnce.Do(func() {
+		close(p.startCh)
+		p.healthCheckLoop(ctx)
+		close(p.closeCh)
+	})
 }
 
 func (p *Prober) healthCheckLoop(ctx context.Context) {
@@ -134,7 +144,7 @@ func (p *Prober) healthCheckLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case at := <-ticker.C:
-			p.l.Error("Probing components")
+			p.l.Debug("Probing components")
 			p.checkComponentsHealth(ctx, at)
 			// limit amount of iterations for the test purposes
 			if p.stopAfterIterationNum > 0 {
@@ -174,7 +184,7 @@ func (p *Prober) spawnEventCollector(name string, component Eventer) {
 			case <-p.closeCh:
 				return
 			case event := <-component.Events():
-				p.l.Infof("Got event from %s: %v", name, event)
+				p.l.WithField("component", name).WithField("event", event).Debug("Got event")
 				p.Lock()
 				p.eventState[name].Value = event
 				p.eventState[name] = p.eventState[name].Next()
@@ -190,22 +200,64 @@ func (p *Prober) Register(name string, component any) {
 
 	withHealth, ok := component.(Healthz)
 	if ok {
-		l.Warnf("component implements Healthz interface, observing")
+		l.Debug("component implements Healthz interface, observing")
 		p.withHealthComponents[name] = withHealth
 	}
 
 	withEvents, ok := component.(Eventer)
 	if ok {
-		l.Warnf("component implements Eventer interface, subscribing")
+		l.Debug("component implements Eventer interface, subscribing")
 		p.withEventComponents[name] = withEvents
 		p.spawnEventCollector(name, withEvents)
 	}
 
 }
 
+// ProbeError is a string that implements the error interface.
+// This is necessary because errors in golang are an interface and not structs,
+// which means they are marshalled as an empty json and cannot be unmarshalled.
+type ProbeError string
+
 // ProbeResult represents a result of a probe
 type ProbeResult struct {
+	Component string
+	At        time.Time
+	Error     error
+}
+
+// probeResultMarshaller is a struct used internally to marshal and unmarshal
+// ProbeResults. It's meant to be used only internally.
+type probeResultMarshaller struct {
 	Component string    `json:"component"`
 	At        time.Time `json:"at"`
-	Error     error     `json:"error"`
+	Error     string    `json:"error"`
+}
+
+func (pr *ProbeResult) MarshalJSON() ([]byte, error) {
+	errStr := ""
+	if pr.Error != nil {
+		errStr = pr.Error.Error()
+	}
+
+	prm := &probeResultMarshaller{
+		Component: pr.Component,
+		At:        pr.At,
+		Error:     errStr,
+	}
+
+	return json.Marshal(prm)
+}
+
+func (pr *ProbeResult) UnmarshalJSON(data []byte) error {
+	upr := &probeResultMarshaller{}
+
+	err := json.Unmarshal(data, upr)
+	if err != nil {
+		return err
+	}
+
+	pr.Component = upr.Component
+	pr.At = upr.At
+	pr.Error = errors.New(upr.Error)
+	return nil
 }

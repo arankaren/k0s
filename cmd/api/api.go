@@ -1,5 +1,5 @@
 /*
-Copyright 2022 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,10 +18,10 @@ package api
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"path"
@@ -29,9 +29,12 @@ import (
 	"strings"
 	"time"
 
+	k0slog "github.com/k0sproject/k0s/internal/pkg/log"
+	mw "github.com/k0sproject/k0s/internal/pkg/middleware"
 	"github.com/k0sproject/k0s/internal/pkg/templatewriter"
-	"github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
+	"github.com/k0sproject/k0s/pkg/apis/k0s/v1beta1"
 	"github.com/k0sproject/k0s/pkg/config"
+	"github.com/k0sproject/k0s/pkg/constant"
 	"github.com/k0sproject/k0s/pkg/etcd"
 	kubeutil "github.com/k0sproject/k0s/pkg/kubernetes"
 
@@ -39,7 +42,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
-	"github.com/gorilla/mux"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
@@ -65,7 +67,7 @@ func NewAPICmd() *cobra.Command {
 		Short: "Run the controller API",
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			logrus.SetOutput(cmd.OutOrStdout())
-			logrus.SetLevel(logrus.InfoLevel)
+			k0slog.SetInfoLevel()
 			return config.CallParentPersistentPreRun(cmd, args)
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -85,39 +87,38 @@ func (c *command) start() (err error) {
 	}
 
 	prefix := "/v1beta1"
-	router := mux.NewRouter()
+	mux := http.NewServeMux()
 	storage := c.NodeConfig.Spec.Storage
 
 	if storage.Type == v1beta1.EtcdStorageType && !storage.Etcd.IsExternalClusterUsed() {
 		// Only mount the etcd handler if we're running on internal etcd storage
 		// by default the mux will return 404 back which the caller should handle
-		router.Path(prefix + "/etcd/members").Methods("POST").Handler(
-			c.controllerHandler(c.etcdHandler()),
-		)
+		mux.Handle(prefix+"/etcd/members", mw.AllowMethods(http.MethodPost)(
+			c.controllerHandler(c.etcdHandler())))
 	}
 
 	if storage.IsJoinable() {
-		router.Path(prefix + "/ca").Methods("GET").Handler(
-			c.controllerHandler(c.caHandler()),
-		)
+		mux.Handle(prefix+"/ca", mw.AllowMethods(http.MethodGet)(
+			c.controllerHandler(c.caHandler())))
 	}
-	router.Path(prefix + "/calico/kubeconfig").Methods("GET").Handler(
-		c.workerHandler(c.kubeConfigHandler()),
-	)
+	mux.Handle(prefix+"/calico/kubeconfig", mw.AllowMethods(http.MethodGet)(
+		c.workerHandler(c.kubeConfigHandler())))
 
 	srv := &http.Server{
-		Handler:      router,
-		Addr:         fmt.Sprintf(":%d", c.NodeConfig.Spec.API.K0sAPIPort),
+		Handler: mux,
+		Addr:    fmt.Sprintf(":%d", c.NodeConfig.Spec.API.K0sAPIPort),
+		TLSConfig: &tls.Config{
+			MinVersion:   tls.VersionTLS12,
+			CipherSuites: constant.AllowedTLS12CipherSuiteIDs,
+		},
 		WriteTimeout: 15 * time.Second,
 		ReadTimeout:  15 * time.Second,
 	}
 
-	log.Fatal(srv.ListenAndServeTLS(
+	return srv.ListenAndServeTLS(
 		filepath.Join(c.K0sVars.CertRootDir, "k0s-api.crt"),
 		filepath.Join(c.K0sVars.CertRootDir, "k0s-api.key"),
-	))
-
-	return nil
+	)
 }
 
 func (c *command) etcdHandler() http.Handler {

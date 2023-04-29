@@ -1,5 +1,5 @@
 /*
-Copyright 2022 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -23,8 +23,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
 
 	"github.com/sirupsen/logrus"
@@ -32,7 +34,7 @@ import (
 	"github.com/k0sproject/k0s/internal/pkg/stringmap"
 	"github.com/k0sproject/k0s/internal/pkg/templatewriter"
 	"github.com/k0sproject/k0s/internal/pkg/users"
-	"github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
+	"github.com/k0sproject/k0s/pkg/apis/k0s/v1beta1"
 	"github.com/k0sproject/k0s/pkg/assets"
 	"github.com/k0sproject/k0s/pkg/component/manager"
 	"github.com/k0sproject/k0s/pkg/constant"
@@ -55,6 +57,8 @@ type APIServer struct {
 var _ manager.Component = (*APIServer)(nil)
 var _ manager.Ready = (*APIServer)(nil)
 
+const kubeAPIComponentName = "kube-apiserver"
+
 var apiDefaultArgs = map[string]string{
 	"allow-privileged":                   "true",
 	"requestheader-extra-headers-prefix": "X-Remote-Extra-",
@@ -62,7 +66,6 @@ var apiDefaultArgs = map[string]string{
 	"requestheader-username-headers":     "X-Remote-User",
 	"secure-port":                        "6443",
 	"anonymous-auth":                     "false",
-	"tls-cipher-suites":                  "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
 }
 
 const egressSelectorConfigTemplate = `
@@ -88,7 +91,7 @@ func (a *APIServer) Init(_ context.Context) error {
 	if err != nil {
 		logrus.Warning(fmt.Errorf("running kube-apiserver as root: %w", err))
 	}
-	return assets.Stage(a.K0sVars.BinDir, "kube-apiserver", constant.BinDirMode)
+	return assets.Stage(a.K0sVars.BinDir, kubeAPIComponentName, constant.BinDirMode)
 }
 
 // Run runs kube api
@@ -109,6 +112,7 @@ func (a *APIServer) Start(_ context.Context) error {
 		"requestheader-client-ca-file":     path.Join(a.K0sVars.CertRootDir, "front-proxy-ca.crt"),
 		"service-account-key-file":         path.Join(a.K0sVars.CertRootDir, "sa.pub"),
 		"service-cluster-ip-range":         a.ClusterConfig.Spec.Network.BuildServiceCIDR(a.ClusterConfig.Spec.API.Address),
+		"tls-min-version":                  "VersionTLS12",
 		"tls-cert-file":                    path.Join(a.K0sVars.CertRootDir, "server.crt"),
 		"tls-private-key-file":             path.Join(a.K0sVars.CertRootDir, "server.key"),
 		"service-account-signing-key-file": path.Join(a.K0sVars.CertRootDir, "sa.key"),
@@ -139,13 +143,16 @@ func (a *APIServer) Start(_ context.Context) error {
 		}
 		args[name] = value
 	}
-
-	args = v1beta1.EnableFeatureGate(args, v1beta1.ServiceInternalTrafficPolicyFeatureGate)
+	args = a.ClusterConfig.Spec.FeatureGates.BuildArgs(args, kubeAPIComponentName)
 	for name, value := range apiDefaultArgs {
 		if args[name] == "" {
 			args[name] = value
 		}
 	}
+	if args["tls-cipher-suites"] == "" {
+		args["tls-cipher-suites"] = constant.AllowedTLS12CipherSuiteNames()
+	}
+
 	if a.DisableEndpointReconciler {
 		args["endpoint-reconciler-type"] = "none"
 	}
@@ -156,8 +163,8 @@ func (a *APIServer) Start(_ context.Context) error {
 	}
 
 	a.supervisor = supervisor.Supervisor{
-		Name:    "kube-apiserver",
-		BinPath: assets.BinPath("kube-apiserver", a.K0sVars.BinDir),
+		Name:    kubeAPIComponentName,
+		BinPath: assets.BinPath(kubeAPIComponentName, a.K0sVars.BinDir),
 		RunDir:  a.K0sVars.RunDir,
 		DataDir: a.K0sVars.DataDir,
 		Args:    apiServerArgs,
@@ -241,7 +248,11 @@ func getEtcdArgs(storage *v1beta1.StorageSpec, k0sVars constant.CfgVars) ([]stri
 
 	switch storage.Type {
 	case v1beta1.KineStorageType:
-		args = append(args, fmt.Sprintf("--etcd-servers=unix://%s", k0sVars.KineSocketPath)) // kine endpoint
+		sockURL := url.URL{
+			Scheme: "unix", OmitHost: true,
+			Path: filepath.ToSlash(k0sVars.KineSocketPath),
+		} // kine endpoint
+		args = append(args, fmt.Sprintf("--etcd-servers=%s", sockURL.String()))
 	case v1beta1.EtcdStorageType:
 		args = append(args, fmt.Sprintf("--etcd-servers=%s", storage.Etcd.GetEndpointsAsString()))
 		if storage.Etcd.IsTLSEnabled() {

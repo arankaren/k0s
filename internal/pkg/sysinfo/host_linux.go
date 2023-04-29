@@ -98,6 +98,9 @@ func (s *K0sSysinfoSpec) addKernelConfigs(linux *linux.LinuxProbes) {
 	// Prerequisite for required config NETFILTER_XT_MATCH_COMMENT
 	netfilter.AssertKernelConfig("NETFILTER_ADVANCED", "Advanced netfilter configuration")
 
+	// kube-proxy will fail without connection tracking
+	netfilter.RequireKernelConfig("NF_CONNTRACK", "Netfilter connection tracking support")
+
 	// Core Netfilter Configuration
 	xtables := netfilter.RequireKernelConfig("NETFILTER_XTABLES", "Netfilter Xtables support")
 	//  *** Xtables targets ***
@@ -121,7 +124,6 @@ func (s *K0sSysinfoSpec) addKernelConfigs(linux *linux.LinuxProbes) {
 
 	// Core Netfilter Configuration
 	netfilter.AssertKernelConfig("NETFILTER_NETLINK", "")
-	netfilter.AssertKernelConfig("NF_CONNTRACK", "Netfilter connection tracking support")
 	netfilter.AssertKernelConfig("NF_NAT", "") // prerequisite for some required configs
 	//  *** Xtables combined modules ***
 	xtables.AssertKernelConfig("NETFILTER_XT_MARK", "nfmark target and match support")
@@ -144,6 +146,9 @@ func (s *K0sSysinfoSpec) addKernelConfigs(linux *linux.LinuxProbes) {
 
 	ipvs := netfilter.AssertKernelConfig("IP_VS", "IP virtual server support")
 	ipvs.AssertKernelConfig("IP_VS_NFCT", "Netfilter connection tracking")
+	ipvs.AssertKernelConfig("IP_VS_SH", "Source hashing scheduling")
+	ipvs.AssertKernelConfig("IP_VS_RR", "Round-robin scheduling")
+	ipvs.AssertKernelConfig("IP_VS_WRR", "Weighted round-robin scheduling")
 
 	// IP: Netfilter Configuration
 	netfilter.AssertKernelConfig("NF_CONNTRACK_IPV4", "IPv4 connetion tracking support (required for NAT)") // enables NF_NAT_IPV4, merged into NF_CONNTRACK in Linux 4.19 (a0ae2562c6c4)

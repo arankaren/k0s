@@ -28,6 +28,16 @@ k0s supports providing only partial configurations. In case of partial configura
     sudo k0s start
     ```
 
+## Configuring k0s via k0sctl
+
+k0sctl can deploy your configuration options at cluster creation time. Your
+options should be placed in the `spec.k0s.config` section of the k0sctl's
+configuration file. See the section on how to install [k0s via
+k0sctl][k0sctl-install] and the [k0sctl README] for more information.
+
+[k0sctl-install]: ../k0sctl-install
+[k0sctl README]: https://github.com/k0sproject/k0sctl/blob/main/README.md
+
 ## Configuration file reference
 
 **CAUTION**: As many of the available options affect items deep in the stack, you should fully understand the correlation between the configuration file components and your specific environment before making any changes.
@@ -51,45 +61,12 @@ spec:
   controllerManager: {}
   extensions:
     helm:
+      concurrencyLevel: 5
       charts: null
       repositories: null
     storage:
       create_default_storage_class: false
       type: external_storage
-  images:
-    default_pull_policy: IfNotPresent
-    calico:
-      cni:
-        image: docker.io/calico/cni
-        version: v3.24.5
-      kubecontrollers:
-        image: docker.io/calico/kube-controllers
-        version: v3.24.5
-      node:
-        image: docker.io/calico/node
-        version: v3.24.5
-    coredns:
-      image: docker.io/coredns/coredns
-      version: 1.10.0
-    konnectivity:
-      image: quay.io/k0sproject/apiserver-network-proxy-agent
-      version: 0.0.33-k0s
-    kubeproxy:
-      image: registry.k8s.io/kube-proxy
-      version: v1.26.0
-    kuberouter:
-      cni:
-        image: docker.io/cloudnativelabs/kube-router
-        version: v1.5.1
-      cniInstaller:
-        image: quay.io/k0sproject/cni-node
-        version: 1.1.1-k0s.0
-    metricsserver:
-      image: registry.k8s.io/metrics-server/metrics-server
-      version: v0.6.2
-    pushgateway:
-      image: quay.io/k0sproject/pushgateway-ttl
-      version: edge@sha256:7031f6bf6c957e2fdb496161fe3bea0a5bde3de800deeba7b2155187196ecbd9
   installConfig:
     users:
       etcdUser: etcd
@@ -135,6 +112,15 @@ spec:
     type: etcd
   telemetry:
     enabled: true
+  featureGates:
+    - name: feature_XXX
+      enabled: true
+      components: ["kubelet", "kube-api", "kube-scheduler"]
+    - name: feature_YYY
+      enabled: true
+    -
+      name: feature_ZZZ
+      enabled: false
 ```
 
 ## `spec` Key Detail
@@ -345,22 +331,52 @@ Note that there are several fields that cannot be overridden:
 
 [kubelet-config]: https://kubernetes.io/docs/reference/config-api/kubelet-config.v1beta1/
 
-#### Examples
+### `spec.featureGates`
 
-##### Feature Gates
+Available components are:
 
-The below is an example of a worker profile with feature gates enabled:
+- kube-apiserver
+- kube-controller-manager
+- kubelet
+- kube-scheduler
+- kube-proxy
+
+If `components` are omitted, propagates to all kube components.
+
+Modifies extraArgs.
+
+#### Example
 
 ```yaml
 spec:
-  workerProfiles:
-    - name: custom-feature-gate      # name of the worker profile
-      values:
-         featureGates:        # feature gates mapping
-            DevicePlugins: true
-            Accelerators: true
-            AllowExtTrafficLocalEndpoints: false
+    featureGates:
+      - name: feature-gate-0
+        enabled: true
+        components: ["kube-apiserver", "kube-controller-manager", "kubelet", "kube-scheduler"]
+      - name: feature-gate-1
+        enabled: true
+      - name: feature-gate-2
+        enabled: false
 ```
+
+#### Kubelet feature gates example
+
+The below is an example of a k0s config with feature gates enabled:
+
+```yaml
+spec:
+    featureGates:
+      - name: DevicePlugins
+        enabled: true
+        components: ["kubelet"]
+      - name: Accelerators
+        enabled: true
+        components: ["kubelet"]
+      - name: AllowExtTrafficLocalEndpoints
+        enabled: false
+```
+
+#### Configuration examples
 
 ##### Custom volumePluginDir
 
@@ -412,6 +428,8 @@ spec:
       version: v1.7.0
 ```
 
+If you want the list of default images and their versions to be included, use `k0s config create --include-images`.
+
 #### Available keys
 
 - `spec.images.konnectivity`
@@ -430,7 +448,7 @@ spec:
 
 If `spec.images.default_pull_policy` is set and not empty, it will be used as a pull policy for each bundled image.
 
-#### Example
+#### Image example
 
 ```yaml
 images:

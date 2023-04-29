@@ -1,5 +1,5 @@
 /*
-Copyright 2022 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -27,7 +27,6 @@ import (
 	"github.com/k0sproject/k0s/pkg/certificate"
 	"github.com/k0sproject/k0s/pkg/config"
 
-	"github.com/cloudflare/cfssl/log"
 	"github.com/spf13/cobra"
 )
 
@@ -68,9 +67,6 @@ Note: A certificate once signed cannot be revoked for a particular user`,
 	optionally add groups:
 	$ k0s kubeconfig create username --groups [groups]`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// disable cfssl log
-			log.Level = log.LevelFatal
-
 			if len(args) == 0 {
 				return fmt.Errorf("username is mandatory")
 			}

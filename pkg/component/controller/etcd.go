@@ -1,5 +1,5 @@
 /*
-Copyright 2022 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -26,13 +26,14 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
+	"go.etcd.io/etcd/client/pkg/v3/tlsutil"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/k0sproject/k0s/internal/pkg/dir"
 	"github.com/k0sproject/k0s/internal/pkg/file"
 	"github.com/k0sproject/k0s/internal/pkg/stringmap"
 	"github.com/k0sproject/k0s/internal/pkg/users"
-	"github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
+	"github.com/k0sproject/k0s/pkg/apis/k0s/v1beta1"
 	"github.com/k0sproject/k0s/pkg/assets"
 	"github.com/k0sproject/k0s/pkg/certificate"
 	"github.com/k0sproject/k0s/pkg/component/manager"
@@ -163,6 +164,7 @@ func (e *Etcd) Start(ctx context.Context) error {
 		"--listen-peer-urls":            peerURL,
 		"--initial-advertise-peer-urls": peerURL,
 		"--name":                        name,
+		"--tls-min-version":             string(tlsutil.TLSVersion12),
 		"--trusted-ca-file":             etcdCaCert,
 		"--cert-file":                   etcdServerCert,
 		"--key-file":                    etcdServerKey,
@@ -201,6 +203,13 @@ func (e *Etcd) Start(ctx context.Context) error {
 			logrus.Warnf("overriding etcd flag with user provided value: %s", argName)
 		}
 		args[argName] = value
+	}
+
+	// Specifying a minimum version of TLS 1.3 _and_ a list of cipher suites
+	// will be rejected.
+	// https://github.com/etcd-io/etcd/pull/15156/files#diff-538c79cd00ec18cb43b5dddd5f36b979d9d050cf478a241304493284739d31bfR810-R813
+	if args["--cipher-suites"] == "" && args["--tls-min-version"] != string(tlsutil.TLSVersion13) {
+		args["--cipher-suites"] = constant.AllowedTLS12CipherSuiteNames()
 	}
 
 	logrus.Debugf("starting etcd with args: %v", args)

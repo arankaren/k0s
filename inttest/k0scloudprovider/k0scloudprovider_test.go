@@ -1,5 +1,5 @@
 /*
-Copyright 2022 k0s authors
+Copyright 2021 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -42,9 +42,6 @@ func (s *K0sCloudProviderSuite) TestK0sGetsUp() {
 	s.Require().NoError(s.WaitJoinAPI(s.ControllerNode(0)))
 
 	err = s.WaitForNodeReady(s.WorkerNode(0), kc)
-	s.Require().NoError(err)
-
-	err = s.WaitForNodeReady(s.WorkerNode(1), kc)
 	s.Require().NoError(err)
 
 	// Test the adding of various addresses using addition via annotations
@@ -123,7 +120,7 @@ func TestK0sCloudProviderSuite(t *testing.T) {
 	suite.Run(t, &K0sCloudProviderSuite{
 		common.FootlooseSuite{
 			ControllerCount: 1,
-			WorkerCount:     2,
+			WorkerCount:     1,
 			LaunchMode:      common.LaunchModeOpenRC,
 		},
 	})

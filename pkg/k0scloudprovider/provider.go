@@ -1,5 +1,5 @@
 /*
-Copyright 2022 k0s authors
+Copyright 2021 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -30,9 +30,9 @@ type provider struct {
 
 var _ cloudprovider.Interface = (*provider)(nil)
 
-// NewProvider creates a new `cloudprovider.Interfaces` using the
-// provided `AddressCollector`
-func NewProvider(ac AddressCollector) cloudprovider.Interface {
+// newProvider creates a new cloud provider using the provided
+// `AddressCollector`
+func newProvider(ac AddressCollector) *provider {
 	return &provider{
 		instances: newInstancesV2(ac),
 	}

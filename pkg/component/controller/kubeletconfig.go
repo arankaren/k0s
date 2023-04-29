@@ -1,5 +1,5 @@
 /*
-Copyright 2022 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@ package controller
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -37,7 +38,7 @@ import (
 	"github.com/k0sproject/k0s/internal/pkg/dir"
 	"github.com/k0sproject/k0s/internal/pkg/file"
 	"github.com/k0sproject/k0s/internal/pkg/templatewriter"
-	"github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
+	"github.com/k0sproject/k0s/pkg/apis/k0s/v1beta1"
 	"github.com/k0sproject/k0s/pkg/constant"
 )
 
@@ -52,15 +53,17 @@ type KubeletConfig struct {
 	kubeClientFactory k8sutil.ClientFactoryInterface
 	k0sVars           constant.CfgVars
 	previousProfiles  v1beta1.WorkerProfiles
+	nodeConfig        *v1beta1.ClusterConfig
 }
 
 // NewKubeletConfig creates new KubeletConfig reconciler
-func NewKubeletConfig(k0sVars constant.CfgVars, clientFactory k8sutil.ClientFactoryInterface) *KubeletConfig {
+func NewKubeletConfig(k0sVars constant.CfgVars, clientFactory k8sutil.ClientFactoryInterface, nodeConfig *v1beta1.ClusterConfig) *KubeletConfig {
 	return &KubeletConfig{
 		log: logrus.WithFields(logrus.Fields{"component": "kubeletconfig"}),
 
 		kubeClientFactory: clientFactory,
 		k0sVars:           k0sVars,
+		nodeConfig:        nodeConfig,
 	}
 }
 
@@ -122,7 +125,7 @@ func (k *KubeletConfig) defaultProfilesExist(ctx context.Context) (bool, error) 
 }
 
 func (k *KubeletConfig) createProfiles(clusterSpec *v1beta1.ClusterConfig) (*bytes.Buffer, error) {
-	dnsAddress, err := clusterSpec.Spec.Network.DNSAddress()
+	dnsAddress, err := k.nodeConfig.Spec.Network.DNSAddress()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get DNS address for kubelet config: %v", err)
 	}
@@ -236,22 +239,18 @@ func getDefaultProfile(dnsAddress string, clusterDomain string) unstructuredYaml
 	// - it's easier to merge programatically defined structure
 	// - apart from map[string]interface there is no good way to define free-form mapping
 
+	cipherSuites := make([]string, len(constant.AllowedTLS12CipherSuiteIDs))
+	for i, cipherSuite := range constant.AllowedTLS12CipherSuiteIDs {
+		cipherSuites[i] = tls.CipherSuiteName(cipherSuite)
+	}
+
 	// for the authentication.x509.clientCAFile and volumePluginDir we want to use later binding so we put template placeholder instead of actual value there
 	profile := unstructuredYamlObject{
-		"apiVersion":    "kubelet.config.k8s.io/v1beta1",
-		"kind":          "KubeletConfiguration",
-		"clusterDNS":    []string{dnsAddress},
-		"clusterDomain": clusterDomain,
-		"tlsCipherSuites": []string{
-			"TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
-			"TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
-			"TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305",
-			"TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
-			"TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305",
-			"TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
-			"TLS_RSA_WITH_AES_256_GCM_SHA384",
-			"TLS_RSA_WITH_AES_128_GCM_SHA256",
-		},
+		"apiVersion":         "kubelet.config.k8s.io/v1beta1",
+		"kind":               "KubeletConfiguration",
+		"clusterDNS":         []string{dnsAddress},
+		"clusterDomain":      clusterDomain,
+		"tlsCipherSuites":    cipherSuites,
 		"failSwapOn":         false,
 		"rotateCertificates": true,
 		"serverTLSBootstrap": true,

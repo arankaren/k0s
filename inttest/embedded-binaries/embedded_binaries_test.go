@@ -41,11 +41,11 @@ func (s *EmbeddedBinariesSuite) TestK0sGetsUp() {
 	s.Require().NoError(err)
 	s.Require().NoError(s.WaitForNodeReady(s.ControllerNode(1), kcC1))
 
-	sshC0, err := s.SSH(s.ControllerNode(0))
+	sshC0, err := s.SSH(s.Context(), s.ControllerNode(0))
 	s.Require().NoError(err)
 	defer sshC0.Disconnect()
 
-	sshC1, err := s.SSH(s.ControllerNode(1))
+	sshC1, err := s.SSH(s.Context(), s.ControllerNode(1))
 	s.Require().NoError(err)
 	defer sshC1.Disconnect()
 
@@ -55,10 +55,10 @@ func (s *EmbeddedBinariesSuite) TestK0sGetsUp() {
 			checkError bool
 			contains   string
 		}{
-			{"containerd -v", true, ""},
-			{"containerd-shim -v", false, "Usage of /var/lib/k0s/bin/containerd-shim"},
-			{"containerd-shim-runc-v1 -v", true, ""},
-			{"containerd-shim-runc-v2 -v", true, ""},
+			{"containerd -v", true, "containerd github.com/containerd/containerd"},
+			{"containerd-shim -v", false, "containerd-shim"},
+			{"containerd-shim-runc-v1 -v", true, "containerd-shim-runc-v1:"},
+			{"containerd-shim-runc-v2 -v", true, "containerd-shim-runc-v2:"},
 			{"etcd --version", true, ""},
 			{"kube-apiserver --version", true, ""},
 			{"kube-controller-manager --version", true, ""},
@@ -70,7 +70,7 @@ func (s *EmbeddedBinariesSuite) TestK0sGetsUp() {
 		}
 
 		for _, tc := range testCases {
-			t.Run("", func(_ *testing.T) {
+			t.Run(tc.cmd, func(_ *testing.T) {
 				out, err := sshC0.ExecWithOutput(s.Context(), fmt.Sprintf("/var/lib/k0s/bin/%s", tc.cmd))
 				if tc.checkError {
 					s.Require().NoError(err, tc.cmd, out)

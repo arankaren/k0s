@@ -1,5 +1,5 @@
 /*
-Copyright 2022 k0s authors
+Copyright 2021 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -19,13 +19,15 @@ package config
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"path"
+	"path/filepath"
 	"testing"
 
-	"github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/clientset/fake"
-	k0sv1beta1 "github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/clientset/typed/k0s.k0sproject.io/v1beta1"
-	"github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
+	"github.com/k0sproject/k0s/pkg/apis/k0s/v1beta1"
+	"github.com/k0sproject/k0s/pkg/client/clientset/fake"
+	k0sv1beta1 "github.com/k0sproject/k0s/pkg/client/clientset/typed/k0s/v1beta1"
 	"github.com/k0sproject/k0s/pkg/constant"
 
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -256,7 +258,11 @@ spec:
 	assert.Equal(t, "kine", cfg.Spec.Storage.Type, "Storage type mismatch")
 	assert.Contains(t,
 		cfg.Spec.Storage.Kine.DataSource,
-		fmt.Sprintf("sqlite://%s/db/state.db", tempDir),
+		(&url.URL{
+			Scheme:   "sqlite",
+			OmitHost: true,
+			Path:     filepath.ToSlash(filepath.Join(tempDir, "db", "state.db")),
+		}).String(),
 		"Data source mismatch",
 	)
 }

@@ -1,5 +1,5 @@
 /*
-Copyright 2022 k0s authors
+Copyright 2021 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -21,13 +21,31 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"github.com/spf13/pflag"
+
 	cloudprovider "k8s.io/cloud-provider"
 	"k8s.io/cloud-provider/app"
 	"k8s.io/cloud-provider/app/config"
 	"k8s.io/cloud-provider/options"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	cliflag "k8s.io/component-base/cli/flag"
+	"k8s.io/component-base/version/verflag"
 )
+
+const (
+	// DefaultBindPort is the default port for the cloud controller manager
+	// server. This value may be overridden by a flag at startup.
+	//
+	// (The constant has been aliased from k8s.io/cloud-provider, as importing
+	// that package directly calls some init functions that register unwanted
+	// global CLI flags. This package's init function suppresses those flags.)
+	DefaultBindPort = cloudprovider.CloudControllerManagerPort
+)
+
+func init() {
+	hideUndesiredGlobalFlags()
+}
 
 type Command func(stopCh <-chan struct{})
 
@@ -44,11 +62,11 @@ type Config struct {
 func NewCommand(c Config) (Command, error) {
 	ccmo, err := options.NewCloudControllerManagerOptions()
 	if err != nil {
-		return nil, fmt.Errorf("unable to initialize command options: %w", err)
+		return nil, fmt.Errorf("unable to initialize cloud provider command options: %w", err)
 	}
 
 	ccmo.KubeCloudShared.CloudProvider.Name = Name
-	ccmo.Kubeconfig = c.KubeConfig
+	ccmo.Generic.ClientConnection.Kubeconfig = c.KubeConfig
 
 	if c.BindPort != 0 {
 		ccmo.SecureServing.BindPort = c.BindPort
@@ -58,36 +76,42 @@ func NewCommand(c Config) (Command, error) {
 		ccmo.NodeStatusUpdateFrequency = metav1.Duration{Duration: c.UpdateFrequency}
 	}
 
-	controllerList := []string{"cloud-node", "cloud-node-lifecycle", "service", "route"}
-	disabledControllerList := []string{"service", "route"}
-
-	ccmc, err := ccmo.Config(controllerList, disabledControllerList)
-	if err != nil {
-		return nil, fmt.Errorf("unable to create k0s-cloud-provider configuration: %w", err)
+	cloudInitializer := func(*config.CompletedConfig) cloudprovider.Interface {
+		// Returns the "k0s cloud provider" using the specified `AddressCollector`
+		return newProvider(c.AddressCollector)
 	}
 
-	return func(stopCh <-chan struct{}) {
-		cloudInitializer := func(config *config.CompletedConfig) cloudprovider.Interface {
-			// Builds the provider using the specified `AddressCollector`
-			cloud := NewProvider(c.AddressCollector)
-
-			controllerInitializers := app.ConstructControllerInitializers(app.DefaultInitFuncConstructors, ccmc.Complete(), cloud)
-			for _, disabledController := range disabledControllerList {
-				delete(controllerInitializers, disabledController)
-			}
-
-			cloud.Initialize(ccmc.ClientBuilder, stopCh)
-
-			return cloud
+	// K0s only supports the cloud-node controller, so only use that.
+	initFuncConstructors := make(map[string]app.ControllerInitFuncConstructor)
+	for _, name := range []string{"cloud-node"} {
+		var ok bool
+		initFuncConstructors[name], ok = app.DefaultInitFuncConstructors[name]
+		if !ok {
+			return nil, fmt.Errorf("failed to find cloud provider controller %q", name)
 		}
+	}
+
+	additionalFlags := cliflag.NamedFlagSets{}
+
+	return func(stopCh <-chan struct{}) {
+		command := app.NewCloudControllerManagerCommand(ccmo, cloudInitializer, initFuncConstructors, additionalFlags, stopCh)
 
 		// Override the commands arguments to avoid it by default using `os.Args[]`
-		fss := cliflag.NamedFlagSets{}
-		command := app.NewCloudControllerManagerCommand(ccmo, cloudInitializer, app.DefaultInitFuncConstructors, fss, stopCh)
 		command.SetArgs([]string{})
 
 		if err := command.Execute(); err != nil {
-			logrus.Errorf("unable to execute command: %v", err)
+			logrus.WithError(err).Errorf("Failed to execute k0s cloud provider")
 		}
 	}, nil
+}
+
+// hideUndesiredGlobalFlags hides some global flags registered by k8s.io
+// components, so that they aren't displayed in help texts. These flags will
+// still be accepted by Cobra, i.e. they won't cause flag parsing errors, but
+// that's all that can be done, since Cobra doesn't allow removing flags, nor is
+// there a way to intercept and suppress their addition.
+func hideUndesiredGlobalFlags() {
+	var flagsToHide pflag.FlagSet
+	verflag.AddFlags(&flagsToHide)
+	flagsToHide.VisitAll(func(f *pflag.Flag) { f.Hidden = true })
 }

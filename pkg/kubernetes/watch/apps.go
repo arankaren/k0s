@@ -1,5 +1,5 @@
 /*
-Copyright 2022 k0s authors
+Copyright 2021 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -26,4 +26,8 @@ func DaemonSets(client Provider[*appsv1.DaemonSetList]) *Watcher[appsv1.DaemonSe
 
 func Deployments(client Provider[*appsv1.DeploymentList]) *Watcher[appsv1.Deployment] {
 	return FromClient[*appsv1.DeploymentList, appsv1.Deployment](client)
+}
+
+func StatefulSets(client Provider[*appsv1.StatefulSetList]) *Watcher[appsv1.StatefulSet] {
+	return FromClient[*appsv1.StatefulSetList, appsv1.StatefulSet](client)
 }

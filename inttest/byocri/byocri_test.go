@@ -1,5 +1,5 @@
 /*
-Copyright 2022 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -56,7 +56,7 @@ func (s *BYOCRISuite) runDockerWorker() error {
 	if token == "" {
 		return fmt.Errorf("got empty token for worker join")
 	}
-	sshWorker, err := s.SSH(s.WorkerNode(0))
+	sshWorker, err := s.SSH(s.Context(), s.WorkerNode(0))
 	if err != nil {
 		return err
 	}

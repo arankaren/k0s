@@ -1,5 +1,5 @@
 /*
-Copyright 2022 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -27,7 +27,7 @@ import (
 
 	"github.com/k0sproject/k0s/internal/pkg/dir"
 	"github.com/k0sproject/k0s/internal/pkg/templatewriter"
-	"github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
+	"github.com/k0sproject/k0s/pkg/apis/k0s/v1beta1"
 	"github.com/k0sproject/k0s/pkg/component/manager"
 	"github.com/k0sproject/k0s/pkg/constant"
 	"github.com/sirupsen/logrus"
@@ -140,6 +140,7 @@ func (k *KubeProxy) getConfig(clusterConfig *v1beta1.ClusterConfig) (proxyConfig
 		DualStack:            clusterConfig.Spec.Network.DualStack.Enabled,
 		Mode:                 clusterConfig.Spec.Network.KubeProxy.Mode,
 		MetricsBindAddress:   clusterConfig.Spec.Network.KubeProxy.MetricsBindAddress,
+		FeatureGates:         clusterConfig.Spec.FeatureGates.AsMap("kube-proxy"),
 	}
 
 	iptables, err := json.Marshal(clusterConfig.Spec.Network.KubeProxy.IPTables)
@@ -167,6 +168,7 @@ type proxyConfig struct {
 	MetricsBindAddress   string
 	IPTables             string
 	IPVS                 string
+	FeatureGates         map[string]bool
 }
 
 const proxyTemplate = `
@@ -262,7 +264,9 @@ data:
     clusterCIDR: {{ .ClusterCIDR }}
     configSyncPeriod: 0s
     featureGates:
-      ServiceInternalTrafficPolicy: true
+{{- range $key, $value := .FeatureGates }}
+      {{ $key }}: {{ $value }}
+{{- end }}
     mode: "{{ .Mode }}"
     conntrack:
       maxPerCore: 0

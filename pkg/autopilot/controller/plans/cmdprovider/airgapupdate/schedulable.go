@@ -18,7 +18,7 @@ import (
 	"context"
 	"fmt"
 
-	apv1beta2 "github.com/k0sproject/k0s/pkg/apis/autopilot.k0sproject.io/v1beta2"
+	apv1beta2 "github.com/k0sproject/k0s/pkg/apis/autopilot/v1beta2"
 	appku "github.com/k0sproject/k0s/pkg/autopilot/controller/plans/cmdprovider/k0supdate/utils"
 	appc "github.com/k0sproject/k0s/pkg/autopilot/controller/plans/core"
 	apsigv2 "github.com/k0sproject/k0s/pkg/autopilot/signaling/v2"
@@ -118,7 +118,7 @@ func signalNodeAirgapUpdateCommandBuilder(node crcli.Object, cmd apv1beta2.PlanC
 	updateContent, updateContentOk := cmd.AirgapUpdate.Platforms[nodePlatformID]
 	if !updateContentOk {
 		appku.UpdatePlanCommandTargetStatusByName(node.GetName(), appc.SignalMissingPlatform, cmdStatus.AirgapUpdate.Workers)
-		return nil, err
+		return nil, fmt.Errorf("for platform ID %s: %s", nodePlatformID, appc.SignalMissingPlatform)
 	}
 
 	return func() apsigv2.Command {

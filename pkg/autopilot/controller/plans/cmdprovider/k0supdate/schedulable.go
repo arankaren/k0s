@@ -1,4 +1,4 @@
-// Copyright 2022 k0s authors
+// Copyright 2021 k0s authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,7 +18,7 @@ import (
 	"context"
 	"fmt"
 
-	apv1beta2 "github.com/k0sproject/k0s/pkg/apis/autopilot.k0sproject.io/v1beta2"
+	apv1beta2 "github.com/k0sproject/k0s/pkg/apis/autopilot/v1beta2"
 	apdel "github.com/k0sproject/k0s/pkg/autopilot/controller/delegate"
 	appku "github.com/k0sproject/k0s/pkg/autopilot/controller/plans/cmdprovider/k0supdate/utils"
 	appc "github.com/k0sproject/k0s/pkg/autopilot/controller/plans/core"
@@ -154,7 +154,7 @@ func signalNodeK0sUpdateCommandBuilder(node crcli.Object, cmd apv1beta2.PlanComm
 	updateContent, updateContentOk := cmd.K0sUpdate.Platforms[nodePlatformID]
 	if !updateContentOk {
 		updatePlanCommandTargetStatusByName(node.GetName(), appc.SignalMissingPlatform, cmdStatus.K0sUpdate)
-		return nil, err
+		return nil, fmt.Errorf("for platform ID %s: %s", nodePlatformID, appc.SignalMissingPlatform)
 	}
 
 	return func() apsigv2.Command {

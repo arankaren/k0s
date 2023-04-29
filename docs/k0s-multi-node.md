@@ -22,15 +22,15 @@ curl -sSLf https://get.k0s.sh | sudo sh
 
 The download script accepts the following environment variables:
 
-| Variable                    | Purpose                                           |
-|:----------------------------|:--------------------------------------------------|
-| `K0S_VERSION=v1.26.0+k0s.0` | Select the version of k0s to be installed         |
-| `DEBUG=true`                | Output commands and their arguments at execution. |
+| Variable                    | Purpose                                                              |
+|:----------------------------|:---------------------------------------------------------------------|
+| `K0S_VERSION=v{{{ extra.k8s_version }}}+k0s.0` | Select the version of k0s to be installed         |
+| `DEBUG=true`                                   | Output commands and their arguments at execution. |
 
 **Note**: If you require environment variables and use sudo, you can do:
 
 ```shell
-curl -sSLf https://get.k0s.sh | sudo K0S_VERSION=v1.26.0+k0s.0 sh
+curl -sSLf https://get.k0s.sh | sudo K0S_VERSION=v{{{ extra.k8s_version }}}+k0s.0 sh
 ```
 
 ### 2. Bootstrap a controller node
@@ -61,7 +61,7 @@ You need a token to join workers to the cluster. The token embeds information th
 To get a token, run the following command on one of the existing controller nodes:
 
 ```shell
-k0s token create --role=worker
+sudo k0s token create --role=worker
 ```
 
 The resulting output is a long [token](#about-tokens) string, which you can use to add a worker to the cluster.
@@ -69,7 +69,7 @@ The resulting output is a long [token](#about-tokens) string, which you can use 
 For enhanced security, run the following command to set an expiration time for the token:
 
 ```shell
-k0s token create --role=worker --expiry=100h > token-file
+sudo k0s token create --role=worker --expiry=100h > token-file
 ```
 
 ### 4. Add workers to the cluster
@@ -101,7 +101,7 @@ The bearer token embedded in the kubeconfig is a [bootstrap token](https://kuber
 To create a join token for the new controller, run the following command on an existing controller:
 
 ```shell
-k0s token create --role=controller --expiry=1h > token-file
+sudo k0s token create --role=controller --expiry=1h > token-file
 ```
 
 On the new controller, run:
@@ -114,7 +114,7 @@ Important notice here is that each controller in the cluster must have k0s.yaml 
 If your configuration file includes IP addresses (node address, sans, etcd peerAddress), remember to update them accordingly for this specific controller node.
 
 ```shell
-k0s start
+sudo k0s start
 ```
 
 ### 6. Check k0s status
@@ -126,7 +126,7 @@ To get general information about your k0s instance's status:
 ```
 
 ```shell
-Version: v1.26.0+k0s.0
+Version: v{{{ extra.k8s_version }}}+k0s.0
 Process ID: 2769
 Parent Process ID: 1
 Role: controller
@@ -144,7 +144,7 @@ sudo k0s kubectl get nodes
 
 ```shell
 NAME   STATUS   ROLES    AGE    VERSION
-k0s    Ready    <none>   4m6s   v1.26.0+k0s
+k0s    Ready    <none>   4m6s   v{{{ extra.k8s_version }}}+k0s
 ```
 
 You can also access your cluster easily with [Lens](https://k8slens.dev/), simply by copying the kubeconfig and pasting it to Lens:

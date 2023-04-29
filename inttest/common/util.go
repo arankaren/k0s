@@ -1,5 +1,5 @@
 /*
-Copyright 2022 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"regexp"
 	"syscall"
 	"time"
@@ -32,6 +33,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -53,6 +55,45 @@ func Poll(ctx context.Context, condition wait.ConditionWithContextFunc) error {
 // the context isn't canceled.
 func WaitForKubeRouterReady(ctx context.Context, kc *kubernetes.Clientset) error {
 	return WaitForDaemonSet(ctx, kc, "kube-router")
+}
+
+// WaitForCoreDNSReady waits to see all coredns pods healthy as long as the context isn't canceled.
+// It also waits to see all the related svc endpoints to be ready to make sure coreDNS is actually
+// ready to serve requests.
+func WaitForCoreDNSReady(ctx context.Context, kc *kubernetes.Clientset) error {
+	err := WaitForDeployment(ctx, kc, "coredns", "kube-system")
+	if err != nil {
+		return err
+	}
+	// Wait till we see the svc endpoints ready
+	return wait.PollImmediateUntilWithContext(ctx, 100*time.Millisecond, func(ctx context.Context) (bool, error) {
+		epSlices, err := kc.DiscoveryV1().EndpointSlices("kube-system").List(ctx, metav1.ListOptions{
+			LabelSelector: "k8s-app=kube-dns",
+		})
+
+		// NotFound is ok, it might not be created yet
+		if err != nil && !apierrors.IsNotFound(err) {
+			return true, err
+		} else if err != nil {
+			return false, nil
+		}
+
+		if len(epSlices.Items) < 1 {
+			return false, nil
+		}
+
+		// Check that all addresses show ready conditions
+		for _, epSlice := range epSlices.Items {
+			for _, endpoint := range epSlice.Endpoints {
+				if !(*endpoint.Conditions.Ready && *endpoint.Conditions.Serving) {
+					// endpoint not ready&serving yet
+					return false, nil
+				}
+			}
+		}
+
+		return true, nil
+	})
 }
 
 func WaitForMetricsReady(ctx context.Context, c *rest.Config) error {
@@ -98,7 +139,8 @@ func WaitForNodeReadyStatus(ctx context.Context, clients kubernetes.Interface, n
 		})
 }
 
-// WaitForDaemonSet waits for daemon set be ready.
+// WaitForDaemonset waits for the DaemonlSet with the given name to have
+// as many ready replicas as defined in the spec.
 func WaitForDaemonSet(ctx context.Context, kc *kubernetes.Clientset, name string) error {
 	return watch.DaemonSets(kc.AppsV1().DaemonSets("kube-system")).
 		WithObjectName(name).
@@ -110,8 +152,8 @@ func WaitForDaemonSet(ctx context.Context, kc *kubernetes.Clientset, name string
 
 // WaitForDeployment waits for the Deployment with the given name to become
 // available as long as the given context isn't canceled.
-func WaitForDeployment(ctx context.Context, kc *kubernetes.Clientset, name string) error {
-	return watch.Deployments(kc.AppsV1().Deployments("kube-system")).
+func WaitForDeployment(ctx context.Context, kc *kubernetes.Clientset, name, namespace string) error {
+	return watch.Deployments(kc.AppsV1().Deployments(namespace)).
 		WithObjectName(name).
 		WithErrorCallback(RetryWatchErrors(logrus.Infof)).
 		Until(ctx, func(deployment *appsv1.Deployment) (bool, error) {
@@ -126,6 +168,17 @@ func WaitForDeployment(ctx context.Context, kc *kubernetes.Clientset, name strin
 			}
 
 			return false, nil
+		})
+}
+
+// WaitForStatefulSet waits for the StatefulSet with the given name to have
+// as many ready replicas as defined in the spec.
+func WaitForStatefulSet(ctx context.Context, kc *kubernetes.Clientset, name, namespace string) error {
+	return watch.StatefulSets(kc.AppsV1().StatefulSets(namespace)).
+		WithObjectName(name).
+		WithErrorCallback(RetryWatchErrors(logrus.Infof)).
+		Until(ctx, func(s *appsv1.StatefulSet) (bool, error) {
+			return s.Status.ReadyReplicas == *s.Spec.Replicas, nil
 		})
 }
 
@@ -227,6 +280,10 @@ func RetryWatchErrors(logf func(format string, args ...any)) watch.ErrorCallback
 
 		case errors.Is(err, syscall.ECONNREFUSED):
 			logf("Encountered connection refused while watching, retrying in %s: %v", retryDelay, err)
+			return retryDelay, nil
+
+		case errors.Is(err, io.EOF):
+			logf("Encountered EOF while watching, retrying in %s: %v", retryDelay, err)
 			return retryDelay, nil
 		}
 

@@ -1,5 +1,5 @@
 /*
-Copyright 2022 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -25,8 +25,9 @@ import (
 	"github.com/avast/retry-go"
 	"github.com/bombsimon/logrusr/v2"
 	"github.com/k0sproject/k0s/internal/pkg/templatewriter"
-	"github.com/k0sproject/k0s/pkg/apis/helm.k0sproject.io/v1beta1"
-	k0sAPI "github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
+	helmapi "github.com/k0sproject/k0s/pkg/apis/helm"
+	"github.com/k0sproject/k0s/pkg/apis/helm/v1beta1"
+	k0sAPI "github.com/k0sproject/k0s/pkg/apis/k0s/v1beta1"
 	"github.com/k0sproject/k0s/pkg/component/controller/leaderelector"
 	"github.com/k0sproject/k0s/pkg/component/manager"
 	"github.com/k0sproject/k0s/pkg/constant"
@@ -39,6 +40,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	ctrlManager "sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -48,24 +50,26 @@ import (
 
 // Helm watch for Chart crd
 type ExtensionsController struct {
-	saver         manifestsSaver
-	L             *logrus.Entry
-	helm          *helm.Commands
-	kubeConfig    string
-	leaderElector leaderelector.Interface
+	concurrencyLevel int
+	saver            manifestsSaver
+	L                *logrus.Entry
+	helm             *helm.Commands
+	kubeConfig       string
+	leaderElector    leaderelector.Interface
 }
 
 var _ manager.Component = (*ExtensionsController)(nil)
 var _ manager.Reconciler = (*ExtensionsController)(nil)
 
 // NewExtensionsController builds new HelmAddons
-func NewExtensionsController(s manifestsSaver, k0sVars constant.CfgVars, kubeClientFactory kubeutil.ClientFactoryInterface, leaderElector leaderelector.Interface) *ExtensionsController {
+func NewExtensionsController(s manifestsSaver, k0sVars constant.CfgVars, kubeClientFactory kubeutil.ClientFactoryInterface, leaderElector leaderelector.Interface, concurrencyLevel int) *ExtensionsController {
 	return &ExtensionsController{
-		saver:         s,
-		L:             logrus.WithFields(logrus.Fields{"component": "extensions_controller"}),
-		helm:          helm.NewCommands(k0sVars),
-		kubeConfig:    k0sVars.AdminKubeConfigPath,
-		leaderElector: leaderElector,
+		concurrencyLevel: concurrencyLevel,
+		saver:            s,
+		L:                logrus.WithFields(logrus.Fields{"component": "extensions_controller"}),
+		helm:             helm.NewCommands(k0sVars),
+		kubeConfig:       k0sVars.AdminKubeConfigPath,
+		leaderElector:    leaderElector,
 	}
 }
 
@@ -170,7 +174,7 @@ func (ec *ExtensionsController) reconcileHelmExtensions(helmSpec *k0sAPI.HelmExt
 			ec.L.WithError(err).Errorf("can't create chart CR instance `%s`: %v", chart.ChartName, err)
 			return fmt.Errorf("can't create chart CR instance `%s`: %v", chart.ChartName, err)
 		}
-		if err := ec.saver.Save("addon_crd_manifest_"+chart.Name+".yaml", buf.Bytes()); err != nil {
+		if err := ec.saver.Save(chart.ManifestFileName(), buf.Bytes()); err != nil {
 			return fmt.Errorf("can't save addon CRD manifest: %v", err)
 		}
 	}
@@ -182,11 +186,6 @@ type ChartReconciler struct {
 	helm          *helm.Commands
 	leaderElector leaderelector.Interface
 	L             *logrus.Entry
-}
-
-func (cr *ChartReconciler) InjectClient(c client.Client) error {
-	cr.Client = c
-	return nil
 }
 
 func (cr *ChartReconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
@@ -339,23 +338,27 @@ func (ec *ExtensionsController) Init(_ context.Context) error {
 
 // Run
 func (ec *ExtensionsController) Start(ctx context.Context) error {
-	config, err := clientcmd.BuildConfigFromFlags("", ec.kubeConfig)
+	clientConfig, err := clientcmd.BuildConfigFromFlags("", ec.kubeConfig)
 	if err != nil {
 		return fmt.Errorf("can't build controller-runtime controller for helm extensions: %w", err)
 	}
+	gk := schema.GroupKind{
+		Group: helmapi.GroupName,
+		Kind:  "Chart",
+	}
 
-	mgr, err := ctrlManager.New(config, ctrlManager.Options{
+	mgr, err := ctrlManager.New(clientConfig, ctrlManager.Options{
 		MetricsBindAddress: "0",
 		Logger:             logrusr.New(ec.L),
+		Controller: config.Controller{
+			GroupKindConcurrency: map[string]int{gk.String(): 10},
+		},
 	})
 	if err != nil {
 		return fmt.Errorf("can't build controller-runtime controller for helm extensions: %w", err)
 	}
 	if err := retry.Do(func() error {
-		_, err := mgr.GetRESTMapper().RESTMapping(schema.GroupKind{
-			Group: v1beta1.GroupVersion.Group,
-			Kind:  "Chart",
-		})
+		_, err := mgr.GetRESTMapper().RESTMapping(gk)
 		if err != nil {
 			ec.L.Warn("Extensions CRD is not yet ready, waiting before starting ExtensionsController")
 			return err
@@ -383,6 +386,7 @@ func (ec *ExtensionsController) Start(ctx context.Context) error {
 			),
 		).
 		Complete(&ChartReconciler{
+			Client:        mgr.GetClient(),
 			leaderElector: ec.leaderElector, // TODO: drop in favor of controller-runtime lease manager?
 			helm:          ec.helm,
 			L:             ec.L.WithField("extensions_type", "helm"),

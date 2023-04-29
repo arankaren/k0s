@@ -1,9 +1,9 @@
-alpine_version = 3.16
+alpine_version = 3.17
 alpine_patch_version = $(alpine_version).3
 golang_buildimage=docker.io/library/golang:$(go_version)-alpine$(alpine_version)
-go_version = 1.19.5
+go_version = 1.20.3
 
-runc_version = 1.1.4
+runc_version = 1.1.6
 runc_buildimage = $(golang_buildimage)
 runc_build_go_tags = "seccomp"
 #runc_build_go_cgo_enabled =
@@ -12,7 +12,7 @@ runc_build_go_tags = "seccomp"
 #runc_build_go_ldflags =
 runc_build_go_ldflags_extra = "-w -s -extldflags=-static"
 
-containerd_version = 1.6.15
+containerd_version = 1.7.0
 containerd_buildimage = $(golang_buildimage)
 containerd_build_go_tags = "apparmor,selinux"
 containerd_build_shim_go_cgo_enabled = 0
@@ -22,7 +22,8 @@ containerd_build_shim_go_cgo_enabled = 0
 #containerd_build_go_ldflags =
 containerd_build_go_ldflags_extra = "-w -s -extldflags=-static"
 
-kubernetes_version = 1.26.0
+kubernetes_version = 1.27.1
+helm_version = 3.11.1
 kubernetes_buildimage = $(golang_buildimage)
 kubernetes_build_go_tags = "providerless"
 #kubernetes_build_go_cgo_enabled =
@@ -31,16 +32,16 @@ kubernetes_build_go_flags = "-v"
 #kubernetes_build_go_ldflags =
 kubernetes_build_go_ldflags_extra = "-w -s -extldflags=-static"
 
-kine_version = 0.9.8
+kine_version = 0.9.9
 kine_buildimage = $(golang_buildimage)
 #kine_build_go_tags =
 #kine_build_go_cgo_enabled =
-kine_build_go_cgo_cflags = "-DSQLITE_ENABLE_DBSTAT_VTAB=1 -DSQLITE_USE_ALLOCA=1" # Flags taken from https://github.com/k3s-io/kine/blob/v0.9.8/scripts/build#L22
+kine_build_go_cgo_cflags = "-DSQLITE_ENABLE_DBSTAT_VTAB=1 -DSQLITE_USE_ALLOCA=1" # Flags taken from https://github.com/k3s-io/kine/blob/v0.9.9/scripts/build#L22
 #kine_build_go_flags =
 kine_build_go_ldflags = "-w -s"
 kine_build_go_ldflags_extra = "-extldflags=-static"
 
-etcd_version = 3.5.6
+etcd_version = 3.5.8
 etcd_buildimage = $(golang_buildimage)
 #etcd_build_go_tags =
 etcd_build_go_cgo_enabled = 0
@@ -50,7 +51,7 @@ etcd_build_go_ldflags = "-w -s"
 #etcd_build_go_ldflags_extra =
 
 konnectivity_buildimage = $(golang_buildimage)
-konnectivity_version = 0.0.33-k0s
+konnectivity_version = 0.0.33-k0s.1
 #konnectivity_build_go_tags =
 konnectivity_build_go_cgo_enabled = 0
 #konnectivity_build_go_cgo_cflags =

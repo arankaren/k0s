@@ -1,5 +1,5 @@
 /*
-Copyright 2022 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,13 +17,15 @@ limitations under the License.
 package worker
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
-	"path"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 
@@ -42,7 +44,6 @@ import (
 	kubeletv1beta1 "k8s.io/kubelet/config/v1beta1"
 	"k8s.io/utils/pointer"
 
-	"github.com/docker/libnetwork/resolvconf"
 	"github.com/sirupsen/logrus"
 	"sigs.k8s.io/yaml"
 )
@@ -155,9 +156,6 @@ func (k *Kubelet) Start(ctx context.Context) error {
 
 	logrus.Info("Starting kubelet")
 	kubeletConfigPath := filepath.Join(k.K0sVars.DataDir, "kubelet-config.yaml")
-	// get the "real" resolv.conf file (in systemd-resolvd bases system,
-	// this will return /run/systemd/resolve/resolv.conf
-	resolvConfPath := resolvconf.Path()
 
 	args := stringmap.StringMap{
 		"--root-dir":        k.dataDir,
@@ -181,30 +179,19 @@ func (k *Kubelet) Start(ctx context.Context) error {
 		kubeletConfigData.ResolvConf = ""
 		args["--enforce-node-allocatable"] = ""
 		args["--pod-infra-container-image"] = "mcr.microsoft.com/oss/kubernetes/pause:1.4.1"
-		args["--network-plugin"] = "cni"
-		args["--cni-bin-dir"] = "C:\\k\\cni"
 		args["--cni-conf-dir"] = "C:\\k\\cni\\config"
 		args["--hostname-override"] = node
 		args["--hairpin-mode"] = "promiscuous-bridge"
 		args["--cert-dir"] = "C:\\var\\lib\\k0s\\kubelet_certs"
 	} else {
 		kubeletConfigData.CgroupsPerQOS = true
-		kubeletConfigData.ResolvConf = resolvConfPath
+		kubeletConfigData.ResolvConf = determineKubeletResolvConfPath()
 	}
 
-	if k.CRISocket != "" {
-		// Due to the removal of dockershim from kube 1.24, we no longer need to
-		// handle any special docker case
-		_, rtSock, err := SplitRuntimeConfig(k.CRISocket)
-		if err != nil {
-			return err
-		}
-		args["--container-runtime-endpoint"] = rtSock
-
-	} else {
-		sockPath := path.Join(k.K0sVars.RunDir, "containerd.sock")
-		args["--container-runtime-endpoint"] = fmt.Sprintf("unix://%s", sockPath)
-		args["--containerd"] = sockPath
+	if k.CRISocket == "" {
+		// Still use this deprecated cAdvisor flag that the kubelet leaks until
+		// KEP 2371 lands. ("cAdvisor-less, CRI-full Container and Pod Stats")
+		args["--containerd"] = filepath.Join(k.K0sVars.RunDir, "containerd.sock")
 	}
 
 	// We only support external providers
@@ -217,7 +204,6 @@ func (k *Kubelet) Start(ctx context.Context) error {
 		extras := flags.Split(k.ExtraArgs)
 		args.Merge(extras)
 	}
-
 	logrus.Debugf("starting kubelet with args: %v", args)
 	k.supervisor = supervisor.Supervisor{
 		Name:    cmd,
@@ -254,6 +240,17 @@ func (k *Kubelet) prepareLocalKubeletConfig(kubeletConfigData kubeletConfig) (st
 	preparedConfig.ResolverConfig = pointer.String(kubeletConfigData.ResolvConf)
 	preparedConfig.CgroupsPerQOS = pointer.Bool(kubeletConfigData.CgroupsPerQOS)
 	preparedConfig.StaticPodURL = kubeletConfigData.StaticPodURL
+
+	if k.CRISocket == "" { // This will never be true for Windows (it needs an externally managed CRI).
+		socketPath := filepath.Join(k.K0sVars.RunDir, "containerd.sock")
+		preparedConfig.ContainerRuntimeEndpoint = "unix://" + filepath.ToSlash(socketPath)
+	} else {
+		_, runtimeEndpoint, err := SplitRuntimeConfig(k.CRISocket)
+		if err != nil {
+			return "", err
+		}
+		preparedConfig.ContainerRuntimeEndpoint = runtimeEndpoint
+	}
 
 	if len(k.Taints) > 0 {
 		var taints []corev1.Taint
@@ -343,4 +340,71 @@ func validateTaintEffect(effect corev1.TaintEffect) error {
 	}
 
 	return nil
+}
+
+// determineKubeletResolvConfPath returns the path to the resolv.conf file that
+// the kubelet should use.
+func determineKubeletResolvConfPath() string {
+	path := "/etc/resolv.conf"
+
+	// https://www.freedesktop.org/software/systemd/man/systemd-resolved.service.html#/etc/resolv.conf
+	// If it's likely that resolv.conf is pointing to a systemd-resolved
+	// nameserver, that nameserver won't be reachable from within containers.
+	// Try to use the alternative resolv.conf path used by systemd-resolved instead.
+	detected, err := hasSystemdResolvedNameserver(path)
+	if err != nil {
+		logrus.WithError(err).Infof("Error while trying to detect the presence of systemd-resolved, using resolv.conf: %s", path)
+		return path
+	}
+
+	if detected {
+		alternatePath := "/run/systemd/resolve/resolv.conf"
+		logrus.Infof("The file %s looks like it's managed by systemd-resolved, using resolv.conf: %s", path, alternatePath)
+		return alternatePath
+	}
+
+	logrus.Infof("Using resolv.conf: %s", path)
+	return path
+}
+
+// hasSystemdResolvedNameserver parses the given resolv.conf file and checks if
+// it contains 127.0.0.53 as the only nameserver. Then it is assumed to be
+// systemd-resolved managed.
+func hasSystemdResolvedNameserver(resolvConfPath string) (bool, error) {
+	f, err := os.Open(resolvConfPath)
+	if err != nil {
+		return false, err
+	}
+
+	defer f.Close()
+
+	// This is roughly how glibc and musl do it: check for "nameserver" followed
+	// by whitespace, then try to parse the next bytes as IP address,
+	// disregarding anything after any additional whitespace.
+	// https://sourceware.org/git/?p=glibc.git;a=blob;f=resolv/res_init.c;h=cce842fa9311c5bdba629f5e78c19746f75ef18e;hb=refs/tags/glibc-2.37#l396
+	// https://git.etalabs.net/cgit/musl/tree/src/network/resolvconf.c?h=v1.2.3#n62
+
+	nameserverLine := regexp.MustCompile(`^nameserver\s+(\S+)`)
+
+	lines := bufio.NewScanner(f)
+	systemdResolvedIPSeen := false
+	for lines.Scan() {
+		match := nameserverLine.FindSubmatch(lines.Bytes())
+		if len(match) < 1 {
+			continue
+		}
+		ip := net.ParseIP(string(match[1]))
+		if ip == nil {
+			continue
+		}
+		if systemdResolvedIPSeen || !ip.Equal(net.IP{127, 0, 0, 53}) {
+			return false, nil
+		}
+		systemdResolvedIPSeen = true
+	}
+	if err := lines.Err(); err != nil {
+		return false, err
+	}
+
+	return systemdResolvedIPSeen, nil
 }

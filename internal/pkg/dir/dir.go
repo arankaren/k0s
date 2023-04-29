@@ -1,5 +1,5 @@
 /*
-Copyright 2022 k0s authors
+Copyright 2020 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -19,7 +19,6 @@ package dir
 import (
 	"fmt"
 	"os"
-	"os/exec"
 )
 
 // IsDirectory check the given path exists and is a directory
@@ -54,10 +53,4 @@ func Init(path string, perm os.FileMode) error {
 		return err
 	}
 	return os.Chmod(path, perm)
-}
-
-// Copy copies the content of a folder
-func Copy(src string, dst string) error {
-	cmd := exec.Command("cp", "-r", "--", src, dst)
-	return cmd.Run()
 }

@@ -1,4 +1,4 @@
-// Copyright 2022 k0s authors
+// Copyright 2021 k0s authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,13 +20,13 @@ import (
 	"testing"
 	"time"
 
-	apv1beta2 "github.com/k0sproject/k0s/pkg/apis/autopilot.k0sproject.io/v1beta2"
-	apcomm "github.com/k0sproject/k0s/pkg/autopilot/common"
+	apv1beta2 "github.com/k0sproject/k0s/pkg/apis/autopilot/v1beta2"
 	apconst "github.com/k0sproject/k0s/pkg/autopilot/constant"
 	appc "github.com/k0sproject/k0s/pkg/autopilot/controller/plans/core"
 	"github.com/k0sproject/k0s/pkg/component/status"
 
 	"github.com/k0sproject/k0s/inttest/common"
+	aptest "github.com/k0sproject/k0s/inttest/common/autopilot"
 
 	"github.com/stretchr/testify/suite"
 )
@@ -56,6 +56,7 @@ type statusJSON struct {
 // SetupTest prepares the controller and filesystem, getting it into a consistent
 // state which we can run tests against.
 func (s *kubeletCertRotateSuite) SetupTest() {
+	ctx := s.Context()
 	s.Require().NoError(s.WaitForSSH(s.ControllerNode(0), 2*time.Minute, 1*time.Second))
 	s.Require().NoError(s.InitController(0, "--disable-components=metrics-server", "--kube-controller-manager-extra-args='--cluster-signing-duration=3m'"))
 	s.Require().NoError(s.WaitJoinAPI(s.ControllerNode(0)))
@@ -63,10 +64,8 @@ func (s *kubeletCertRotateSuite) SetupTest() {
 	extClient, err := s.ExtensionsClient(s.ControllerNode(0))
 	s.Require().NoError(err)
 
-	_, perr := apcomm.WaitForCRDByName(s.Context(), extClient, "plans.autopilot.k0sproject.io", 2*time.Minute)
-	s.Require().NoError(perr)
-	_, cerr := apcomm.WaitForCRDByName(s.Context(), extClient, "controlnodes.autopilot.k0sproject.io", 2*time.Minute)
-	s.Require().NoError(cerr)
+	s.Require().NoError(aptest.WaitForCRDByName(ctx, extClient, "plans"))
+	s.Require().NoError(aptest.WaitForCRDByName(ctx, extClient, "controlnodes"))
 
 	// Create a worker join token
 	workerJoinToken, err := s.GetJoinToken("worker")
@@ -85,10 +84,11 @@ func (s *kubeletCertRotateSuite) SetupTest() {
 	// Knowing that `kube-controller-manager` is issuing certificates that live for
 	// only 3m, if we can successfully apply autopilot plans AFTER kubelet key/certs have changed, we should
 	// be able to confidentally say that the transport cert rotation is fine.
-	workerSSH, err := s.SSH(s.WorkerNode(0))
+	workerSSH, err := s.SSH(s.Context(), s.WorkerNode(0))
 	s.Require().NoError(err)
 	s.T().Log("waiting to see kubelet rotating the client cert before triggering Plan creation")
-	workerSSH.ExecWithOutput(s.Context(), "inotifywait --no-dereference /var/lib/k0s/kubelet/pki/kubelet-client-current.pem")
+	_, err = workerSSH.ExecWithOutput(s.Context(), "inotifywait --no-dereference /var/lib/k0s/kubelet/pki/kubelet-client-current.pem")
+	s.Require().NoError(err)
 	output, err := workerSSH.ExecWithOutput(s.Context(), "k0s status -ojson")
 	s.Require().NoError(err)
 	status := statusJSON{}
@@ -119,6 +119,8 @@ spec:
         platforms:
           linux-amd64:
             url: http://localhost/dist/k0s
+          linux-arm64:
+            url: http://localhost/dist/k0s
         targets:
           controllers:
             discovery:
@@ -146,15 +148,10 @@ spec:
 	s.NotEmpty(client)
 
 	// The plan has enough information to perform a successful update of k0s, so wait for it.
-	plan, err := apcomm.WaitForPlanByName(s.Context(), client, apconst.AutopilotName, 10*time.Minute, func(plan *apv1beta2.Plan) bool {
-		return plan.Status.State == appc.PlanCompleted
-	})
+	plan, err := aptest.WaitForPlanState(s.Context(), client, apconst.AutopilotName, appc.PlanCompleted)
+	s.Require().NoError(err)
 
 	// Ensure all state/status are completed
-
-	s.Require().NoError(err)
-	s.Equal(appc.PlanCompleted, plan.Status.State)
-
 	s.Equal(1, len(plan.Status.Commands))
 	cmd := plan.Status.Commands[0]
 

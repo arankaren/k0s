@@ -1,5 +1,5 @@
 /*
-Copyright 2022 k0s authors
+Copyright 2021 k0s authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -22,29 +22,29 @@ import (
 	"testing"
 
 	"github.com/k0sproject/k0s/internal/testutil"
-	"github.com/k0sproject/k0s/pkg/apis/k0s.k0sproject.io/v1beta1"
+	"github.com/k0sproject/k0s/pkg/apis/k0s/v1beta1"
 	"github.com/k0sproject/k0s/pkg/constant"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-var cfg = v1beta1.DefaultClusterConfig()
-
 func TestGetConfigWithZeroNodes(t *testing.T) {
+	cfg := v1beta1.DefaultClusterConfig()
 	k0sVars := constant.GetConfig(t.TempDir())
 	fakeFactory := testutil.NewFakeClientFactory()
 	ctx := context.Background()
 
 	metrics := NewMetricServer(k0sVars, fakeFactory)
 	require.NoError(t, metrics.Reconcile(ctx, cfg))
-	cfg, err := metrics.getConfig(ctx)
+	metricsCfg, err := metrics.getConfig(ctx)
 	require.NoError(t, err)
-	require.Equal(t, "10m", cfg.CPURequest)
-	require.Equal(t, "30M", cfg.MEMRequest)
+	require.Equal(t, "10m", metricsCfg.CPURequest)
+	require.Equal(t, "30M", metricsCfg.MEMRequest)
 }
 
 func TestGetConfigWithSomeNodes(t *testing.T) {
+	cfg := v1beta1.DefaultClusterConfig()
 	k0sVars := constant.GetConfig(t.TempDir())
 	fakeFactory := testutil.NewFakeClientFactory()
 	fakeClient, _ := fakeFactory.GetClient()
@@ -62,8 +62,8 @@ func TestGetConfigWithSomeNodes(t *testing.T) {
 
 	metrics := NewMetricServer(k0sVars, fakeFactory)
 	require.NoError(t, metrics.Reconcile(ctx, cfg))
-	cfg, err := metrics.getConfig(ctx)
+	metricsCfg, err := metrics.getConfig(ctx)
 	require.NoError(t, err)
-	require.Equal(t, "100m", cfg.CPURequest)
-	require.Equal(t, "300M", cfg.MEMRequest)
+	require.Equal(t, "100m", metricsCfg.CPURequest)
+	require.Equal(t, "300M", metricsCfg.MEMRequest)
 }
